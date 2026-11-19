@@ -1,0 +1,17 @@
+{
+    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+    "version": "0.5.0-1",
+    "bundle": {
+        "targets": [
+            "nsis"
+        ]
+    },
+    "plugins": {
+        "updater": {
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQxRkRCOTU1OTYzRDUwRTMKUldUalVEMldWYm45UVRtb0pzSmVBMUdFekVaSklsTjI0RjFoZlNuWGNJa0Q4R0o3bkRsaWJhWnEK",
+            "endpoints": [
+                "https://github.com/LeoRock-13/meetily/releases/latest/download/latest.json"
+            ]
+        }
+    }
+}
