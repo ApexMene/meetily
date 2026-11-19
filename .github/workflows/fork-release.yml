@@ -37,6 +37,21 @@ jobs:
           echo "::error::Run this workflow from the '${RELEASE_BRANCH}' branch (got ${GITHUB_REF})."
           exit 1
 
+      - name: Check updater signing secrets are set
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          missing=0
+          if [ -z "$SIGNING_KEY" ]; then echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY is not set"; missing=1; fi
+          if [ -z "$SIGNING_KEY_PASSWORD" ]; then echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set"; missing=1; fi
+          # The key file is one base64 line that decodes to a minisign "untrusted comment: ... secret key" header
+          # (this also rejects the .pub file pasted by mistake).
+          if [ -n "$SIGNING_KEY" ] && ! printf '%s' "$SIGNING_KEY" | tr -d '\r\n ' | base64 -d 2>/dev/null | head -1 | grep -q '^untrusted comment:.*secret key'; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not the content of the .key file (see FORK.md)"; missing=1
+          fi
+          exit $missing
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

@@ -55,7 +55,13 @@ Se una build fallisce, elimina la bozza (e il tag, se creato) e rilancia.
 
 - Privata: `%USERPROFILE%\.tauri\meetily-fork.key` (+ password), copia nel password manager.
 - Pubblica: in `tauri.fork.conf.json` → `plugins.updater.pubkey`.
-- Secrets GitHub del fork: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+- Secrets GitHub del fork (Actions): `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+  Impostali dal file, senza copia-incolla (PowerShell):
+  ```powershell
+  Get-Content -Raw "$env:USERPROFILE\.tauri\meetily-fork.key" | gh secret set TAURI_SIGNING_PRIVATE_KEY -R LeoRock-13/meetily
+  gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R LeoRock-13/meetily
+  ```
+  Il workflow si ferma subito se mancano o se la chiave non è nel formato giusto.
 
 **Se la chiave privata va persa** le app installate rifiuteranno ogni aggiornamento futuro:
 serve generare una nuova coppia, aggiornare la pubkey e reinstallare a mano su ogni PC.
