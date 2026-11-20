@@ -15,7 +15,11 @@
 //!
 //! User-editable files in `<app data>/notion-agent/`:
 //! - `config.json`  — enabled, model, proxy, test_mode, min_seconds (written with defaults);
-//! - `meeting-to-notion.md` — the agent prompt (seeded from the bundled copy, never overwritten).
+//! - `meeting-to-notion.md` — the agent prompt (seeded from the bundled copy, never overwritten);
+//! - `.env` — personal values (name, Notion ids, proxy). `{{KEY}}` in the prompt is replaced
+//!   with `KEY` from this file; `PROXY` / `NO_PROXY` override config.json; `PROMPT_FILE` points to
+//!   a personal prompt anywhere on disk. A commented template
+//!   is written on first run.
 
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use serde::{Deserialize, Serialize};
@@ -74,8 +78,8 @@ impl Default for AgentConfig {
         Self {
             enabled: true,
             model: "sonnet".into(),
-            proxy: "http://127.0.0.1:9876".into(),
-            no_proxy: "localhost,127.0.0.1,.italtel.it".into(),
+            proxy: String::new(),
+            no_proxy: "localhost,127.0.0.1".into(),
             test_mode: false,
             min_seconds: 120.0,
             since: None,
@@ -135,14 +139,97 @@ fn load_config(base: &Path) -> AgentConfig {
     if config.since.is_none() {
         config.since = Some(Utc::now());
     }
+    let env = load_env(base);
+    let from_env = |key: &str| env.get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let (proxy, no_proxy) = (from_env("PROXY"), from_env("NO_PROXY"));
     // Rewrite so new fields with defaults become visible to the user.
     if let Err(error) = write_json(&path, &config) {
         log::warn!("notion-agent: cannot write config: {}", error);
     }
+    // .env wins over config.json, and is not copied into it.
+    if let Some(proxy) = proxy {
+        config.proxy = proxy;
+    }
+    if let Some(no_proxy) = no_proxy {
+        config.no_proxy = no_proxy;
+    }
     config
 }
 
+const ENV_TEMPLATE: &str = "# Meetily -> Notion: personal values used by the agent prompt ({{KEY}}).
+# Keep this file private. Lines: KEY=value
+USER_NAME=
+# Other ways people call you in meetings, comma separated
+USER_ALIASES=
+# Notion data sources (collection://...) and the Work area page URL
+NOTION_TASKS_DB=
+NOTION_PROJECTS_DB=
+NOTION_WORK_AREA=
+TIMEZONE=Europe/Rome
+# Value written in the Sync_Source property of the pages the agent creates
+SYNC_SOURCE=meetily
+# Optional: full path of your own prompt file (default: meeting-to-notion.md next to this file)
+PROMPT_FILE=
+# Example task title and name fixes, to make the agent match your projects
+TASK_EXAMPLE=Inviare la stima effort a Mario
+NAME_FIXES=\"copilota studio\" -> Copilot Studio
+# Optional HTTP proxy for Claude Code (e.g. http://127.0.0.1:8080) and its exclusions
+PROXY=
+NO_PROXY=localhost,127.0.0.1
+";
+
+/// Reads `<base>/.env` (KEY=value lines; `#` comments; optional quotes). Writes the template
+/// when the file does not exist.
+fn load_env(base: &Path) -> std::collections::HashMap<String, String> {
+    let path = base.join(".env");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(_) => {
+            let _ = std::fs::create_dir_all(base);
+            let _ = std::fs::write(&path, ENV_TEMPLATE);
+            ENV_TEMPLATE.to_string()
+        }
+    };
+    parse_env(&text)
+}
+
+fn parse_env(text: &str) -> std::collections::HashMap<String, String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| {
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            (key.trim().to_string(), value.replace("\\\"", "\""))
+        })
+        .collect()
+}
+
+/// Replaces `{{KEY}}` with values from `.env`; warns about keys left empty.
+fn fill_placeholders(text: &str, env: &std::collections::HashMap<String, String>) -> String {
+    let mut out = text.to_string();
+    for (key, value) in env {
+        out = out.replace(&format!("{{{{{}}}}}", key), value);
+    }
+    if let Some(start) = out.find("{{") {
+        let missing: String = out[start..].chars().take(40).collect();
+        log::warn!("notion-agent: prompt placeholder without value in .env: {}", missing);
+    }
+    out
+}
+
 fn load_prompt(base: &Path) -> String {
+    // A personal prompt elsewhere on disk wins, when .env points to it.
+    if let Some(custom) = load_env(base).get("PROMPT_FILE").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
+        match std::fs::read_to_string(&custom) {
+            Ok(text) if !text.trim().is_empty() => return text,
+            _ => log::warn!("notion-agent: PROMPT_FILE {} not readable, using the default prompt", custom),
+        }
+    }
     let path = base.join("meeting-to-notion.md");
     match std::fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => text,
@@ -180,6 +267,8 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
         };
         let _ = load_config(&base); // seeds config.json and the `since` marker
         let _ = load_prompt(&base);
+        let env = load_env(&base);
+        log::info!("notion-agent: .env loaded ({} values)", env.values().filter(|v| !v.trim().is_empty()).count());
         log::info!("notion-agent: worker started in {:?}", base);
         loop {
             let config = load_config(&base);
@@ -377,7 +466,7 @@ async fn process<R: Runtime>(app: &AppHandle<R>, base: &Path, config: &AgentConf
             ..Default::default()
         });
     }
-    let prompt = load_prompt(base);
+    let prompt = fill_placeholders(&load_prompt(base), &load_env(base));
     let stdin = format!(
         "<instructions>\n{}\n</instructions>\n\nMETA\n{}\n\nTRASCRIZIONE\n{}",
         prompt, input.meta, input.transcript
@@ -516,6 +605,14 @@ mod tests {
     fn cli_error_is_retried() {
         assert!(parse_outcome(r#"{"is_error":true,"result":"API Error: ENETUNREACH"}"#).is_err());
         assert!(parse_outcome("not json").is_err());
+    }
+
+    #[test]
+    fn env_fills_prompt() {
+        let env = parse_env("# c\nUSER_NAME=Mario Rossi\nNAME_FIXES=\"a\" -> B\nPROXY=\n");
+        assert_eq!(env.get("USER_NAME").map(String::as_str), Some("Mario Rossi"));
+        assert_eq!(fill_placeholders("Ciao {{USER_NAME}}", &env), "Ciao Mario Rossi");
+        assert_eq!(env.get("PROXY").map(String::as_str), Some(""));
     }
 
     #[test]
