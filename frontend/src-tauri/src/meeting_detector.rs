@@ -33,7 +33,7 @@ impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            start_debounce_secs: 20,
+            start_debounce_secs: 5,
             stop_grace_secs: 20,
             apps: [
                 "msteams", "teams.exe", "zoom", "webex", "ciscocollabhost", "slack", "discord",
