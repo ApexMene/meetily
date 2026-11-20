@@ -5,6 +5,7 @@
   var app = q.get('app') || '';
   var since = Number(q.get('since')) || Date.now();
   var compact = q.get('compact') === '1';
+  var key = q.get('key') || '';
   function invoke(cmd, args) {
     try { return window.__TAURI_INTERNALS__.invoke(cmd, args || {}); } catch (e) { console.error(e); }
   }
@@ -44,7 +45,8 @@
   if (mode === 'stopped') {
     $('dot').className = 'dot off';
     $('title').textContent = 'Meeting terminato';
-    $('sub').textContent = 'Trascrizione salvata. Il resoconto va in Notion appena pronto.';
+    $('sub').textContent = 'Trascrizione salvata. Il resoconto va in Notion appena pronto.' +
+      (key ? ' ' + key + ' per registrare.' : '');
     $('stop').className = 'hidden';
     $('open').textContent = 'Apri meeting';
     $('mdot').className = 'dot off';
@@ -52,7 +54,9 @@
     $('min').className = 'hidden';
     return;
   }
-  $('sub').textContent = (app ? 'Meeting rilevato (' + app + ')' : 'Meeting rilevato') + ' · la trascrizione si apre in Meetily';
+  $('sub').textContent = (app ? 'Meeting rilevato (' + app + ')' : 'Avviata da te') +
+    (key ? ' · ' + key + ' per fermare' : ' · la trascrizione si apre in Meetily');
+  if (key) $('stop').title = key;
   function tick() {
     var s = Math.max(0, Math.floor((Date.now() - since) / 1000));
     var m = Math.floor(s / 60), r = s % 60;

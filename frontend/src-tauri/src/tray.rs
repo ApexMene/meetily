@@ -351,7 +351,7 @@ fn build_menu<R: Runtime>(
         match state {
             RecordingState::Stopped => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("toggle_recording", format!("Start Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Starting => {
                 builder = builder.item(
@@ -363,7 +363,7 @@ fn build_menu<R: Runtime>(
             RecordingState::Recording => {
                 builder = builder
                     .item(&MenuItemBuilder::with_id("pause_recording", "⏸ Pause Recording").build(app)?)
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Pausing => {
                 builder = builder
@@ -372,7 +372,7 @@ fn build_menu<R: Runtime>(
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Paused => {
                 builder = builder
@@ -380,7 +380,7 @@ fn build_menu<R: Runtime>(
                         &MenuItemBuilder::with_id("resume_recording", "▶ Resume Recording")
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Resuming => {
                 builder = builder
@@ -389,7 +389,7 @@ fn build_menu<R: Runtime>(
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Stopping => {
                 builder = builder.item(

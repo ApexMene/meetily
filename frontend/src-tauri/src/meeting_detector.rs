@@ -27,6 +27,9 @@ pub struct DetectorConfig {
     pub stop_grace_secs: u64,
     /// Case-insensitive fragments of the registry key (package name or exe path).
     pub apps: Vec<String>,
+    /// Global shortcut that starts/stops a recording from anywhere (e.g. "Ctrl+Alt+M").
+    /// Empty = no shortcut. Read at app start.
+    pub shortcut: String,
 }
 
 impl Default for DetectorConfig {
@@ -34,7 +37,7 @@ impl Default for DetectorConfig {
         Self {
             enabled: true,
             start_debounce_secs: 5,
-            stop_grace_secs: 20,
+            stop_grace_secs: 8,
             apps: [
                 "msteams", "teams.exe", "zoom", "webex", "ciscocollabhost", "slack", "discord",
                 "skype", "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera",
@@ -43,6 +46,7 @@ impl Default for DetectorConfig {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+            shortcut: "Ctrl+Alt+M".to_string(),
         }
     }
 }
@@ -174,15 +178,25 @@ fn on_some_monitor<R: Runtime>(app: &AppHandle<R>, x: f64, y: f64) -> bool {
 /// Shows the Notion-style bar: where the user last left it, otherwise at the top centre of
 /// the primary screen. `mode` is "recording" or "stopped".
 pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
-    close_pill(app);
+    let generation = PILL_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let prefs = load_pill_prefs(app);
     let safe_name: String = app_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
     let since = chrono::Utc::now().timestamp_millis();
     let url = format!(
-        "pill.html?mode={}&app={}&since={}&compact={}",
-        mode, safe_name, since, if prefs.compact { 1 } else { 0 }
+        "pill.html?mode={}&app={}&since={}&compact={}&key={}",
+        mode, safe_name, since, if prefs.compact { 1 } else { 0 },
+        load_config(app).shortcut.trim().replace('+', "%2B")
     );
     let (width, height) = pill_size(prefs.compact);
+    if mode == "stopped" {
+        schedule_pill_close(app, generation);
+    }
+    // Reuse the open bar (closing is asynchronous: a new window with the same label would fail).
+    if let Some(window) = app.get_webview_window(PILL_LABEL) {
+        let _ = window.eval(&format!("location.replace({:?})", format!("/{}", url)));
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        return;
+    }
     let default_pos = app
         .primary_monitor()
         .ok()
@@ -224,13 +238,6 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
                     save_pill_prefs(&handle, &prefs);
                 }
             });
-            if mode == "stopped" {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(PILL_STOPPED_SECS)).await;
-                    close_pill(&app);
-                });
-            }
         }
         Err(error) => log::warn!("meeting-detector: cannot show bar: {}", error),
     }
@@ -254,6 +261,19 @@ pub async fn meeting_pill_compact<R: Runtime>(app: AppHandle<R>, compact: bool) 
         let (width, height) = pill_size(compact);
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
     }
+}
+
+static PILL_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Hides the "stopped" bar after a few seconds, unless a newer bar replaced it meanwhile.
+fn schedule_pill_close<R: Runtime>(app: &AppHandle<R>, generation: u64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(PILL_STOPPED_SECS)).await;
+        if PILL_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
+            close_pill(&app);
+        }
+    });
 }
 
 pub fn close_pill<R: Runtime>(app: &AppHandle<R>) {
@@ -299,10 +319,64 @@ enum Phase {
     HandsOff,
 }
 
+/// "   (Ctrl+Alt+M)" for menu labels, empty when no shortcut is set.
+pub fn shortcut_hint<R: Runtime>(app: &AppHandle<R>) -> String {
+    let key = load_config(app).shortcut.trim().to_string();
+    if key.is_empty() { String::new() } else { format!("   ({})", key) }
+}
+
+/// Registers the global start/stop shortcut from `auto-meeting.json`.
+fn register_shortcut<R: Runtime>(app: &AppHandle<R>, config: &DetectorConfig) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+    let text = config.shortcut.trim();
+    if text.is_empty() {
+        return;
+    }
+    let shortcut = match text.parse::<Shortcut>() {
+        Ok(shortcut) => shortcut,
+        Err(error) => {
+            log::warn!("meeting-detector: invalid shortcut {:?}: {}", text, error);
+            return;
+        }
+    };
+    let result = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
+        if event.state != ShortcutState::Pressed {
+            return;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if crate::audio::recording_commands::is_recording().await {
+                log::info!("meeting-detector: shortcut -> stop recording");
+                crate::tray::stop_recording_from_app(&app);
+                show_pill(&app, "stopped", "");
+            } else {
+                log::info!("meeting-detector: shortcut -> start recording");
+                crate::tray::start_recording_from_app(&app);
+                show_pill(&app, "recording", "");
+            }
+        });
+    });
+    match result {
+        Ok(()) => log::info!("meeting-detector: shortcut {} registered", text),
+        Err(error) => {
+            // Usually another app already owns it.
+            log::warn!("meeting-detector: cannot register shortcut {}: {}", text, error);
+            use tauri_plugin_notification::NotificationExt;
+            let _ = app
+                .notification()
+                .builder()
+                .title("Meetily: scorciatoia non disponibile")
+                .body(format!("{} e' gia' usata da un'altra app. Cambiala in auto-meeting.json.", text))
+                .show();
+        }
+    }
+}
+
 pub fn start<R: Runtime>(app: AppHandle<R>) {
     if !cfg!(windows) {
         return;
     }
+    register_shortcut(&app, &load_config(&app));
     tauri::async_runtime::spawn(async move {
         let own_exe = std::env::current_exe()
             .ok()
