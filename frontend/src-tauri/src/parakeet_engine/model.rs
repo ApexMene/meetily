@@ -76,8 +76,11 @@ impl Drop for ParakeetModel {
 
 impl ParakeetModel {
     pub fn new<P: AsRef<Path>>(model_dir: P, quantized: bool) -> Result<Self, ParakeetError> {
-        let encoder = Self::init_session(&model_dir, "encoder-model", None, quantized)?;
-        let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", None, quantized)?;
+        // Fork: 4 threads are as fast as all of them on hybrid laptop CPUs (benchmarked on a 2P+4E
+        // i5) and leave the rest of the machine responsive during the post-meeting pass.
+        let threads = Some(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(4));
+        let encoder = Self::init_session(&model_dir, "encoder-model", threads, quantized)?;
+        let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", threads, quantized)?;
         let preprocessor = Self::init_session(&model_dir, "nemo128", None, false)?;
 
         let (vocab, blank_idx) = Self::load_vocab(&model_dir)?;
