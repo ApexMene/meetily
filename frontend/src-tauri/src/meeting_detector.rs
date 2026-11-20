@@ -142,9 +142,9 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
             let width = monitor.size().width as f64 / scale;
             let left = monitor.position().x as f64 / scale;
             let top = monitor.position().y as f64 / scale;
-            (left + (width - PILL_WIDTH) / 2.0, top + 8.0)
+            (left + (width - PILL_WIDTH) / 2.0, top + 100.0) // below the meeting app title bar and other apps' bars
         })
-        .unwrap_or((400.0, 8.0));
+        .unwrap_or((400.0, 100.0));
     let built = tauri::WebviewWindowBuilder::new(app, PILL_LABEL, tauri::WebviewUrl::App(url.into()))
         .title("Meetily")
         .inner_size(PILL_WIDTH, PILL_HEIGHT)

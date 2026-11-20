@@ -1,6 +1,6 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "version": "0.5.0-5",
+    "version": "0.5.0-6",
     "bundle": {
         "targets": [
             "nsis"
