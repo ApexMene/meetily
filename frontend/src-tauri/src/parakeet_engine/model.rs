@@ -143,7 +143,7 @@ impl ParakeetModel {
         if let Some(threads) = intra_threads {
             builder = builder
                 .with_intra_threads(threads)?
-                .with_inter_threads(threads)?;
+                .with_inter_threads(1)?;
         }
 
         let session = builder.commit_from_file(model_dir.as_ref().join(&model_filename))?;

@@ -43,6 +43,8 @@
   .hrow .n { width:200px; flex:0 0 auto; } .hrow.ko .d { color:var(--err); } .hrow .d { color:var(--muted); }
   .spin { display:inline-block; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
+  details.adv { margin: 8px 0; } details.adv summary { cursor: pointer; font-weight: 600; margin-bottom: 6px; }
+  #opdl button { margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -57,14 +59,26 @@
     <input id="shortcut" placeholder="Ctrl+Alt+M" size="16"><span class="hint">premi i tasti qui dentro; vuoto = nessuna</span></div>
   <div class="field"><label for="days">Cancella l'audio dopo (giorni)</label>
     <input id="days" type="number" min="0" max="3650" style="width:80px"><span class="hint">trascrizione e resoconto restano; 0 = mai</span></div>
+  <div class="field"><label for="autostart">Avvia con Windows</label>
+    <input id="autostart" type="checkbox"><span class="hint">parte nascosta, solo icona vicino all'orologio</span></div>
+  <details class="adv"><summary>Avanzate: trascrizione e Claude</summary>
   <div class="field"><label for="pass2">Ritrascrizione a fine meeting</label>
     <select id="pass2"><option value="off">No, tieni la trascrizione live</option><option value="model">Si', con il modello scelto</option><option value="full">Si', modello + pulizia con Claude (serve Claude Code)</option></select>
     <span class="hint">rifa' il testo con piu' calma, in sottofondo (~10-20 min per ora di audio); la copia live resta in transcripts.live.json</span></div>
   <div class="field" id="pass2modelrow"><label for="pass2model">Modello per la ritrascrizione</label>
     <select id="pass2model"><option value="">Automatico (ultra se installato, altrimenti quello live)</option></select>
     <span class="hint">consigliato Parakeet ultra: in Modelli personalizzati aggiungi Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx (int8)</span></div>
-  <div class="field"><label for="autostart">Avvia con Windows</label>
-    <input id="autostart" type="checkbox"><span class="hint">parte nascosta, solo icona vicino all'orologio</span></div>
+  <div class="field pass2dep"><label for="opinion">Seconda opinione (secondo modello)</label>
+    <select id="opinion"><option value="">Nessuna</option></select>
+    <span class="hint">un modello specializzato nella lingua del meeting; Claude unisce i due testi (serve la pulizia con Claude)</span></div>
+  <div class="field pass2dep" id="opdl"></div>
+  <div class="field"><label for="cleanmodel">Claude per pulizia e unione</label>
+    <select id="cleanmodel"><option value="haiku">Haiku (veloce, consigliato)</option><option value="sonnet">Sonnet</option></select></div>
+  <div class="field"><label for="recapmodel">Claude per resoconto e task</label>
+    <select id="recapmodel"><option value="sonnet">Sonnet (consigliato)</option><option value="opus">Opus (piu' lento)</option><option value="haiku">Haiku</option></select></div>
+  <div class="field"><label>Prompt di Claude</label><button id="prompts">Apri cartella prompt</button>
+    <span class="hint">transcript-cleanup.md (pulizia) e meeting-to-notion.md (resoconto), modificabili</span></div>
+  </details>
   <div class="field"><button class="primary" id="save">Salva</button><span id="sstatus"></span></div>
 </section>
 <section class="settings">
@@ -142,9 +156,32 @@
   document.getElementById('refresh').onclick = load;
   var sc = document.getElementById('shortcut'), days = document.getElementById('days'), st = document.getElementById('sstatus');
   var auto = document.getElementById('autostart'), pass2 = document.getElementById('pass2'), pass2model = document.getElementById('pass2model');
-  function syncPass2() { document.getElementById('pass2modelrow').style.display = pass2.value === 'off' ? 'none' : ''; }
+  var opinion = document.getElementById('opinion'), cleanmodel = document.getElementById('cleanmodel'), recapmodel = document.getElementById('recapmodel');
+  function syncPass2() { Array.prototype.forEach.call(document.querySelectorAll('#pass2modelrow, .pass2dep'), function (e) { e.style.display = pass2.value === 'off' ? 'none' : ''; }); }
+  function loadOpinions(selected) {
+    invoke('second_opinion_list').then(function (ms) {
+      var keep = selected === undefined ? opinion.value : selected;
+      while (opinion.options.length > 1) opinion.remove(1);
+      var dl = document.getElementById('opdl'); dl.textContent = '';
+      (ms || []).forEach(function (m) {
+        if (m.installed) { var o = document.createElement('option'); o.value = m.name; o.textContent = m.label; opinion.appendChild(o); }
+        else {
+          var b = el('button', '', 'Scarica: ' + m.label);
+          b.onclick = function () {
+            b.disabled = true; b.textContent = 'Scarico ' + m.label + '...';
+            invoke('second_opinion_install', { name: m.name }).then(function () { loadOpinions(m.name); },
+              function (e) { b.disabled = false; b.textContent = 'Errore: ' + e + ' (riprova)'; });
+          };
+          dl.appendChild(b);
+        }
+      });
+      opinion.value = keep || '';
+    });
+  }
+  invoke('agent_models_get').then(function (m) { cleanmodel.value = m.clean_model || 'haiku'; recapmodel.value = m.recap_model || 'sonnet'; });
+  document.getElementById('prompts').onclick = function () { invoke('prompts_open_folder'); };
   pass2.onchange = syncPass2;
-  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; pass2.value = s.second_pass || 'off'; syncPass2();
+  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; pass2.value = s.second_pass || 'off'; syncPass2(); loadOpinions(s.second_opinion || '');
     invoke('parakeet_get_available_models').then(function (ms) {
       (ms || []).filter(function (m) { return m.status === 'Available'; }).forEach(function (m) {
         var o = document.createElement('option'); o.value = m.name; o.textContent = m.name; pass2model.appendChild(o);
@@ -188,7 +225,8 @@
   });
   document.getElementById('save').onclick = function () {
     st.style.color = ''; st.textContent = 'Salvo...';
-    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked, second_pass: pass2.value, second_pass_model: pass2model.value } })
+    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked, second_pass: pass2.value, second_pass_model: pass2model.value, second_opinion: opinion.value } })
+      .then(function () { return invoke('agent_models_set', { models: { recap_model: recapmodel.value, clean_model: cleanmodel.value } }); })
       .then(function () { st.style.color = 'var(--ok)'; st.textContent = 'Salvato'; },
             function (e) { st.style.color = 'var(--err)'; st.textContent = String(e); });
   };
