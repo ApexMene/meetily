@@ -276,7 +276,8 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
         log::info!("notion-agent: worker started in {:?}", base);
         loop {
             let config = load_config(&base);
-            if config.enabled {
+            // The queue also drives the post-meeting re-transcription, which works without Notion.
+            if config.enabled || crate::meeting_detector::second_pass_mode(&app) != "off" {
                 if let Err(error) = scan_meetings(&app, &base, &config).await {
                     log::warn!("notion-agent: scan failed: {}", error);
                 }
@@ -356,6 +357,15 @@ async fn run_due_jobs<R: Runtime>(app: &AppHandle<R>, base: &Path, config: &Agen
             }
             job.retranscribed = true;
             let _ = write_json(&path, &job);
+        }
+        if !config.enabled {
+            // Re-transcription only: no Notion recap.
+            set_running(None);
+            let record = serde_json::json!({ "meeting_id": job.meeting_id, "finished": Utc::now(), "outcome": { "status": "skipped", "note": "Notion disattivato, solo ritrascrizione" } });
+            if write_json(&job_path(base, "done", &job.meeting_id), &record).is_ok() {
+                let _ = std::fs::remove_file(&path);
+            }
+            continue;
         }
         let result = process(app, base, config, &job.meeting_id).await;
         set_running(None);
@@ -915,7 +925,7 @@ async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeti
     };
     backup_live_transcript(&pool, meeting_id, Path::new(&folder)).await;
 
-    let model = second_pass_model().await;
+    let model = second_pass_model(app).await;
     let started = std::time::Instant::now();
     log::info!("notion-agent: second pass ({:?}, {}) for {}", model, mode, meeting_id);
     match crate::audio::retranscription::start_retranscription(app.clone(), meeting_id.to_string(), folder, None, model, Some("parakeet".to_string())).await {
@@ -950,15 +960,20 @@ async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeti
     true
 }
 
-/// Parakeet "ultra" (better Italian, same speed) when it is installed as a custom model.
-const ULTRA_MODEL: &str = "custom-parakeet-tdt-0-6b-v3-ultra-onnx-int8";
-
-async fn second_pass_model() -> Option<String> {
+/// The model chosen in the settings; on "automatic", an installed custom Parakeet model with
+/// "ultra" in its id (fine-tuned v3, clearly better in benchmarks at the same speed), otherwise
+/// None = the live model.
+async fn second_pass_model<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let chosen = crate::meeting_detector::second_pass_model(app);
+    if !chosen.is_empty() {
+        return Some(chosen);
+    }
     let models = crate::custom_models::engine_hooks::parakeet_models().await;
     models
-        .iter()
-        .any(|m| m.name == ULTRA_MODEL && matches!(m.status, crate::parakeet_engine::parakeet_engine::ModelStatus::Available))
-        .then(|| ULTRA_MODEL.to_string())
+        .into_iter()
+        .filter(|m| matches!(m.status, crate::parakeet_engine::parakeet_engine::ModelStatus::Available))
+        .find(|m| m.name.to_lowercase().contains("ultra"))
+        .map(|m| m.name)
 }
 
 async fn backup_live_transcript(pool: &sqlx::SqlitePool, meeting_id: &str, folder: &Path) {
@@ -987,15 +1002,15 @@ async fn backup_live_transcript(pool: &sqlx::SqlitePool, meeting_id: &str, folde
 }
 
 const CLEAN_SYSTEM: &str = "You clean automatic speech transcripts. Answer only with the requested lines.";
-const CLEAN_PROMPT: &str = "Questa e' la trascrizione automatica di un meeting di lavoro in italiano, con termini tecnici \
-inglesi (deploy, backlog, pull request, feedback, meeting...). E' divisa in segmenti numerati.
-Il modello a volte sbaglia parole, cambia lingua per errore o inventa frasi su rumore e silenzio
-(es. frammenti in spagnolo, tedesco, cirillico, parole senza senso).
-Per OGNI segmento riscrivi la versione piu' probabile di cio' che e' stato detto:
-- correggi solo errori evidenti (parole storpiate, lingua sbagliata), mantieni i termini inglesi usati di proposito;
-- non inventare, non riassumere, non aggiungere contenuto;
-- se il segmento e' rumore o senza senso scrivi esattamente: [rumore]
-Output: una riga per segmento, nello stesso ordine, formato \"n. testo\". Nient'altro.";
+const CLEAN_PROMPT: &str = "This is the automatic transcript of a work meeting, split into numbered segments. \
+It may contain English technical terms on purpose (deploy, backlog, pull request, feedback...).
+The speech model sometimes mishears words, switches to the wrong language by mistake, or invents
+phrases on noise and silence (fragments in unrelated languages or scripts, nonsense words).
+For EACH segment write the most likely version of what was actually said:
+- keep the language the meeting is held in; fix only obvious errors (garbled words, wrong language);
+- keep technical terms, names and numbers; do not invent, summarize or add content;
+- if the segment is noise or meaningless write exactly: [noise]
+Output: one line per segment, same order, format \"n. text\". Nothing else.";
 const CLEAN_CHUNK: usize = 60;
 
 /// Haiku pass over the re-transcribed segments. Returns (kept, dropped).
@@ -1065,7 +1080,7 @@ fn parse_clean_answer(answer: &str, expected: usize) -> Option<Vec<Option<String
             continue;
         }
         let text = text.trim();
-        out[n - 1] = Some(if text.is_empty() || text.eq_ignore_ascii_case("[rumore]") { None } else { Some(text.to_string()) });
+        out[n - 1] = Some(if text.is_empty() || text.eq_ignore_ascii_case("[noise]") { None } else { Some(text.to_string()) });
     }
     out.into_iter().collect()
 }
