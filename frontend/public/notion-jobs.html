@@ -62,49 +62,9 @@
 <header>
   <h1>Resoconti Notion</h1>
   <span class="sub" id="updated"></span>
+  <span class="sub">Impostazioni: Meetily › Settings</span>
   <button id="refresh">Aggiorna</button>
 </header>
-<section class="settings">
-  <h2>Impostazioni</h2>
-  <div class="field"><label for="shortcut">Scorciatoia avvia/ferma registrazione</label>
-    <input id="shortcut" placeholder="Ctrl+Alt+M" size="16"><span class="hint">premi i tasti qui dentro; vuoto = nessuna</span></div>
-  <div class="field"><label for="days">Cancella l'audio dopo (giorni)</label>
-    <input id="days" type="number" min="0" max="3650" style="width:80px"><span class="hint">trascrizione e resoconto restano; 0 = mai</span></div>
-  <div class="field"><label for="autostart">Avvia con Windows</label>
-    <input id="autostart" type="checkbox"><span class="hint">parte nascosta, solo icona vicino all'orologio</span></div>
-  <details class="adv" id="adv"><summary>Avanzate: qualità della trascrizione e Claude</summary>
-  <p class="intro">Cosa succede quando un meeting finisce:</p>
-  <ol class="flow" id="flow"></ol>
-
-  <h3>1. Ritrascrizione a fine meeting</h3>
-  <p class="help">Durante il meeting il testo viene scritto al volo, a pezzetti. A fine meeting Meetily può riascoltare
-    tutta la registrazione con più calma: il testo diventa molto più pulito. Lavora in sottofondo (circa 10-20 minuti
-    per ogni ora di meeting), anche se chiudi il portatile e vai via dopo.</p>
-  <div class="field"><label for="pass2">Ritrascrivere?</label>
-    <select id="pass2">
-      <option value="off">No, tieni il testo scritto durante il meeting</option>
-      <option value="model">Sì, con il modello scelto qui sotto</option>
-      <option value="full">Sì, e poi Claude sistema il testo (consigliato)</option>
-    </select></div>
-  <div class="field pass2dep" id="pass2modelrow"><label for="pass2model">Modello principale</label>
-    <select id="pass2model"><option value="">Automatico (il migliore installato)</option></select>
-    <span class="hint">il migliore è Parakeet ultra; si aggiunge da Impostazioni › Modelli personalizzati</span></div>
-  <div class="field pass2dep"><label for="opinion">Secondo modello (facoltativo)</label>
-    <select id="opinion"><option value="">Nessuno</option></select>
-    <span class="hint">specializzato nella lingua del meeting: Claude unisce i due testi</span></div>
-  <div class="field pass2dep" id="opdlrow"><label></label><div id="opdl"></div></div>
-  <p class="warn pass2dep" id="opwarn">Il secondo modello serve solo se Claude sistema il testo: scegli “Sì, e poi Claude sistema il testo”.</p>
-
-  <h3>2. Claude</h3>
-  <div class="field"><label for="cleanmodel">Chi sistema il testo</label>
-    <select id="cleanmodel"><option value="haiku">Claude Haiku (veloce, consigliato)</option><option value="sonnet">Claude Sonnet (più lento)</option></select></div>
-  <div class="field"><label for="recapmodel">Chi scrive resoconto e task</label>
-    <select id="recapmodel"><option value="sonnet">Claude Sonnet (consigliato)</option><option value="opus">Claude Opus (più accurato, più lento)</option><option value="haiku">Claude Haiku (più veloce)</option></select></div>
-  <div class="field"><label>Istruzioni per Claude</label><button id="prompts">Apri la cartella delle istruzioni</button>
-    <span class="hint">due file di testo modificabili: <b>transcript-cleanup.md</b> (come sistemare il testo) e <b>meeting-to-notion.md</b> (come scrivere il resoconto)</span></div>
-  </details>
-  <div class="field"><button class="primary" id="save">Salva</button><span id="sstatus"></span></div>
-</section>
 <section class="settings">
   <h2>Stato sistema <span class="hint" id="hcheck" style="font-weight:normal;color:var(--muted)"></span></h2>
   <div id="health"><span class="hint">Primo controllo tra poco dopo l'avvio...</span></div>
@@ -178,57 +138,6 @@
     }, function (e) { list.textContent = ''; list.appendChild(el('div', 'empty', 'Errore: ' + e)); });
   }
   document.getElementById('refresh').onclick = load;
-  var sc = document.getElementById('shortcut'), days = document.getElementById('days'), st = document.getElementById('sstatus');
-  var auto = document.getElementById('autostart'), pass2 = document.getElementById('pass2'), pass2model = document.getElementById('pass2model');
-  var opinion = document.getElementById('opinion'), cleanmodel = document.getElementById('cleanmodel'), recapmodel = document.getElementById('recapmodel');
-  function label(sel) { var o = sel.options[sel.selectedIndex]; return o ? o.textContent.replace(/ \(.*\)$/, '') : ''; }
-  function syncPass2() {
-    var on = pass2.value !== 'off', claude = pass2.value === 'full';
-    Array.prototype.forEach.call(document.querySelectorAll('.pass2dep'), function (e) { e.style.display = on ? '' : 'none'; });
-    document.getElementById('opwarn').style.display = on && !claude && opinion.value ? '' : 'none';
-    var steps = [['Testo scritto durante il meeting', true],
-      ['Ritrascrizione: ' + (pass2model.value ? label(pass2model) : 'modello migliore') + (opinion.value ? ' + ' + label(opinion) : ''), on],
-      [label(cleanmodel) + ' sistema il testo', claude],
-      [label(recapmodel) + ' scrive resoconto e task in Notion', true]];
-    var flow = document.getElementById('flow'); flow.textContent = '';
-    steps.forEach(function (st) { var li = el('li', st[1] ? '' : 'off'); li.appendChild(el('span', '', st[0])); flow.appendChild(li); });
-  }
-  function dirty() { st.className = 'dirty'; st.style.color = ''; st.textContent = 'Modifiche non salvate: premi Salva'; syncPass2(); }
-  Array.prototype.forEach.call(document.querySelectorAll('.settings select, .settings input'), function (e) { e.addEventListener('change', dirty); });
-  function loadOpinions(selected) {
-    invoke('second_opinion_list').then(function (ms) {
-      var keep = selected === undefined ? opinion.value : selected;
-      while (opinion.options.length > 1) opinion.remove(1);
-      var dl = document.getElementById('opdl'); dl.textContent = '';
-      (ms || []).forEach(function (m) {
-        if (m.installed) { var o = document.createElement('option'); o.value = m.name; o.textContent = m.label; opinion.appendChild(o); }
-        else {
-          var b = el('button', '', '⬇ Scarica ' + m.label);
-          b.onclick = function () {
-            b.disabled = true; b.textContent = 'Download in corso: ' + m.label + ' (qualche minuto)...';
-            invoke('second_opinion_install', { name: m.name }).then(function () { loadOpinions(m.name); dirty(); },
-              function (e) { b.disabled = false; b.textContent = 'Errore: ' + e + ' (riprova)'; });
-          };
-          dl.appendChild(b);
-        }
-      });
-      opinion.value = keep || '';
-      syncPass2();
-    });
-  }
-  invoke('agent_models_get').then(function (m) { cleanmodel.value = m.clean_model || 'haiku'; recapmodel.value = m.recap_model || 'sonnet'; syncPass2(); });
-  document.getElementById('prompts').onclick = function () { invoke('prompts_open_folder'); };
-  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; pass2.value = s.second_pass || 'off'; syncPass2(); loadOpinions(s.second_opinion || '');
-    invoke('parakeet_get_available_models').then(function (ms) {
-      (ms || []).filter(function (m) { return m.status === 'Available'; }).forEach(function (m) {
-        var o = document.createElement('option'); o.value = m.name; o.textContent = m.name; pass2model.appendChild(o);
-      });
-      if (s.second_pass_model && !Array.prototype.some.call(pass2model.options, function (o) { return o.value === s.second_pass_model; })) {
-        var o = document.createElement('option'); o.value = s.second_pass_model; o.textContent = s.second_pass_model + ' (non trovato)'; pass2model.appendChild(o);
-      }
-      pass2model.value = s.second_pass_model || ''; syncPass2();
-    }, function () { pass2model.value = s.second_pass_model || ''; });
-  });
   function renderHealth(r) {
     var box = document.getElementById('health');
     if (!r.checks || !r.checks.length) return;
@@ -249,31 +158,7 @@
     invoke('health_run').then(function (r) { renderHealth(r); b.disabled = false; b.textContent = 'Ricontrolla ora'; },
       function () { b.disabled = false; b.textContent = 'Ricontrolla ora'; });
   };
-  sc.addEventListener('keydown', function (e) {
-    if (e.key === 'Tab') return;
-    e.preventDefault();
-    if (e.key === 'Backspace' || e.key === 'Delete') { sc.value = ''; return; }
-    if (['Control', 'Alt', 'Shift', 'Meta'].indexOf(e.key) >= 0) return;
-    var parts = [];
-    if (e.ctrlKey) parts.push('Ctrl'); if (e.altKey) parts.push('Alt'); if (e.shiftKey) parts.push('Shift'); if (e.metaKey) parts.push('Super');
-    if (!parts.length || (parts.length === 1 && parts[0] === 'Shift')) { st.textContent = 'Usa almeno Ctrl o Alt'; return; }
-    var k = e.code.replace(/^Key/, '').replace(/^Digit/, '');
-    parts.push(k); sc.value = parts.join('+'); st.textContent = '';
-  });
-  document.getElementById('save').onclick = function () {
-    st.className = ''; st.style.color = ''; st.textContent = 'Salvo...';
-    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked, second_pass: pass2.value, second_pass_model: pass2model.value, second_opinion: opinion.value } })
-      .then(function () { return invoke('agent_models_set', { models: { recap_model: recapmodel.value, clean_model: cleanmodel.value } }); })
-      .then(function () { st.style.color = 'var(--ok)'; st.textContent = 'Salvato'; },
-            function (e) { st.style.color = 'var(--err)'; st.textContent = String(e); });
-  };
   load(); setInterval(load, 5000);
-  function showSection() {
-    if (location.hash !== '#adv') return;
-    var adv = document.getElementById('adv'); adv.open = true;
-    setTimeout(function () { adv.scrollIntoView({ block: 'start' }); }, 300);
-  }
-  window.addEventListener('hashchange', showSection); showSection();
 })();
 </script>
 </body>

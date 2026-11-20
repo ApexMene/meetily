@@ -102,13 +102,6 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                     <h3 className="text-lg font-semibold text-gray-900">Transcript Settings</h3>
                 </div> */}
                 <div className="space-y-4 pb-6">
-                    {/* Fork: the post-meeting re-transcription settings live in the "Resoconti e impostazioni" window */}
-                    <div className="flex items-center justify-between gap-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-gray-700">
-                        <span>Ritrascrizione a fine meeting, secondo modello e Claude: sono nelle impostazioni avanzate.</span>
-                        <Button size="sm" variant="outline" className="shrink-0" onClick={() => invoke('notion_agent_open_jobs', { section: 'adv' })}>
-                            Apri Avanzate
-                        </Button>
-                    </div>
                     <div>
                         <Label className="block text-sm font-medium text-gray-700 mb-1">
                             Transcript Model
