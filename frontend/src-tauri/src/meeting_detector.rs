@@ -35,8 +35,12 @@ pub struct DetectorConfig {
     pub audio_retention_days: u32,
     /// Start Meetily (in the tray) when Windows starts.
     pub start_with_windows: bool,
-    /// Re-transcription of the whole recording after the meeting: "parakeet", "whisper" (Italian), "off".
+    /// Re-transcription of the whole recording after the meeting (opt-in):
+    /// "off", "model" (local model only) or "full" (local model + Claude cleanup).
     pub second_pass: String,
+    /// Parakeet model for the re-transcription. Empty = automatic (an installed "ultra" custom
+    /// model if any, otherwise the live model).
+    pub second_pass_model: String,
 }
 
 impl Default for DetectorConfig {
@@ -56,7 +60,8 @@ impl Default for DetectorConfig {
             shortcut: "Ctrl+Alt+M".to_string(),
             audio_retention_days: 30,
             start_with_windows: true,
-            second_pass: "full".to_string(),
+            second_pass: "off".to_string(),
+            second_pass_model: String::new(),
         }
     }
 }
@@ -463,17 +468,24 @@ pub struct AutoSettings {
     start_with_windows: bool,
     #[serde(default)]
     second_pass: String,
+    #[serde(default)]
+    second_pass_model: String,
 }
 
 /// Post-meeting re-transcription (see notion_agent::second_pass):
 /// "full" = best local model + Claude Haiku cleanup, "model" = local model only, "off".
-/// Older values ("parakeet", "whisper") map to "full".
+/// Off unless the user turned it on.
 pub fn second_pass_mode<R: Runtime>(app: &AppHandle<R>) -> String {
     match load_config(app).second_pass.as_str() {
-        "off" => "off".into(),
         "model" => "model".into(),
-        _ => "full".into(),
+        "full" => "full".into(),
+        _ => "off".into(),
     }
+}
+
+/// Model chosen for the re-transcription; empty = automatic.
+pub fn second_pass_model<R: Runtime>(app: &AppHandle<R>) -> String {
+    load_config(app).second_pass_model.trim().to_string()
 }
 
 fn yes() -> bool {
@@ -538,6 +550,7 @@ pub async fn auto_settings_get<R: Runtime>(app: AppHandle<R>) -> AutoSettings {
         audio_retention_days: config.audio_retention_days,
         start_with_windows: config.start_with_windows,
         second_pass: second_pass_mode(&app),
+        second_pass_model: config.second_pass_model,
     }
 }
 
@@ -557,6 +570,7 @@ pub async fn auto_settings_set<R: Runtime>(app: AppHandle<R>, settings: AutoSett
     if ["full", "model", "off"].contains(&settings.second_pass.as_str()) {
         config.second_pass = settings.second_pass.clone();
     }
+    config.second_pass_model = settings.second_pass_model.trim().chars().take(200).collect();
     apply_autostart(config.start_with_windows);
     let path = config_path(&app).ok_or("no app data dir")?;
     std::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap_or_default()).map_err(|e| e.to_string())?;

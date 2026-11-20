@@ -58,8 +58,11 @@
   <div class="field"><label for="days">Cancella l'audio dopo (giorni)</label>
     <input id="days" type="number" min="0" max="3650" style="width:80px"><span class="hint">trascrizione e resoconto restano; 0 = mai</span></div>
   <div class="field"><label for="pass2">Ritrascrizione a fine meeting</label>
-    <select id="pass2"><option value="full">Completa: modello migliore + pulizia con Claude (~25 min per ora)</option><option value="model">Solo modello migliore (~22 min per ora)</option><option value="off">No, tieni la trascrizione live</option></select>
-    <span class="hint">e' il testo che va a Claude e in Notion</span></div>
+    <select id="pass2"><option value="off">No, tieni la trascrizione live</option><option value="model">Si', con il modello scelto</option><option value="full">Si', modello + pulizia con Claude (serve Claude Code)</option></select>
+    <span class="hint">rifa' il testo con piu' calma, in sottofondo (~10-20 min per ora di audio); la copia live resta in transcripts.live.json</span></div>
+  <div class="field" id="pass2modelrow"><label for="pass2model">Modello per la ritrascrizione</label>
+    <select id="pass2model"><option value="">Automatico (ultra se installato, altrimenti quello live)</option></select>
+    <span class="hint">consigliato Parakeet ultra: in Modelli personalizzati aggiungi Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx (int8)</span></div>
   <div class="field"><label for="autostart">Avvia con Windows</label>
     <input id="autostart" type="checkbox"><span class="hint">parte nascosta, solo icona vicino all'orologio</span></div>
   <div class="field"><button class="primary" id="save">Salva</button><span id="sstatus"></span></div>
@@ -138,8 +141,20 @@
   }
   document.getElementById('refresh').onclick = load;
   var sc = document.getElementById('shortcut'), days = document.getElementById('days'), st = document.getElementById('sstatus');
-  var auto = document.getElementById('autostart'), pass2 = document.getElementById('pass2');
-  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; pass2.value = s.second_pass || 'full'; });
+  var auto = document.getElementById('autostart'), pass2 = document.getElementById('pass2'), pass2model = document.getElementById('pass2model');
+  function syncPass2() { document.getElementById('pass2modelrow').style.display = pass2.value === 'off' ? 'none' : ''; }
+  pass2.onchange = syncPass2;
+  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; pass2.value = s.second_pass || 'off'; syncPass2();
+    invoke('parakeet_get_available_models').then(function (ms) {
+      (ms || []).filter(function (m) { return m.status === 'Available'; }).forEach(function (m) {
+        var o = document.createElement('option'); o.value = m.name; o.textContent = m.name; pass2model.appendChild(o);
+      });
+      if (s.second_pass_model && !Array.prototype.some.call(pass2model.options, function (o) { return o.value === s.second_pass_model; })) {
+        var o = document.createElement('option'); o.value = s.second_pass_model; o.textContent = s.second_pass_model + ' (non trovato)'; pass2model.appendChild(o);
+      }
+      pass2model.value = s.second_pass_model || '';
+    }, function () { pass2model.value = s.second_pass_model || ''; });
+  });
   function renderHealth(r) {
     var box = document.getElementById('health');
     if (!r.checks || !r.checks.length) return;
@@ -173,7 +188,7 @@
   });
   document.getElementById('save').onclick = function () {
     st.style.color = ''; st.textContent = 'Salvo...';
-    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked, second_pass: pass2.value } })
+    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked, second_pass: pass2.value, second_pass_model: pass2model.value } })
       .then(function () { st.style.color = 'var(--ok)'; st.textContent = 'Salvato'; },
             function (e) { st.style.color = 'var(--err)'; st.textContent = String(e); });
   };
