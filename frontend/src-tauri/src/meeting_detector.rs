@@ -124,7 +124,7 @@ fn meeting_app(apps_in_use: &[String], config: &DetectorConfig, own_exe: &str) -
 }
 
 const PILL_LABEL: &str = "meeting-pill";
-const PILL_WIDTH: f64 = 520.0;
+const PILL_WIDTH: f64 = 620.0;
 const PILL_HEIGHT: f64 = 76.0;
 /// Like Notion's bar: the recording bar stays for the whole meeting; the "stopped" bar hides
 /// itself after a few seconds.
