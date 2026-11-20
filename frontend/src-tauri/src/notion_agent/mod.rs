@@ -173,6 +173,8 @@ PROMPT_FILE=
 # Example task title and name fixes, to make the agent match your projects
 TASK_EXAMPLE=Inviare la stima effort a Mario
 NAME_FIXES=\"copilota studio\" -> Copilot Studio
+# Optional Windows scheduled task the health check starts when the proxy does not answer
+REPAIR_TASK=
 # Optional HTTP proxy for Claude Code (e.g. http://127.0.0.1:8080) and its exclusions
 PROXY=
 NO_PROXY=localhost,127.0.0.1
@@ -815,4 +817,30 @@ pub fn open_jobs_window<R: Runtime>(app: &AppHandle<R>) {
 #[tauri::command]
 pub async fn notion_agent_open_jobs<R: Runtime>(app: AppHandle<R>) {
     open_jobs_window(&app);
+}
+
+
+// Fork: inputs for the health check (crate::health).
+
+/// Proxy environment Claude runs with, and the optional repair task from `.env` (REPAIR_TASK).
+pub fn health_inputs<R: Runtime>(app: &AppHandle<R>) -> (Vec<(String, String)>, String) {
+    let Some(base) = base_dir(app) else { return (Vec::new(), String::new()) };
+    let env = load_env(&base);
+    (proxy_env(&load_config(&base)), env.get("REPAIR_TASK").cloned().unwrap_or_default())
+}
+
+/// Queued recaps that have already failed at least once.
+pub fn failing_jobs<R: Runtime>(app: &AppHandle<R>) -> usize {
+    let Some(base) = base_dir(app) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(base.join("queue")) else { return 0 };
+    entries
+        .flatten()
+        .filter_map(|e| std::fs::read(e.path()).ok())
+        .filter_map(|b| serde_json::from_slice::<Job>(&b).ok())
+        .filter(|job| job.attempts > 0)
+        .count()
+}
+
+pub fn wake() {
+    WAKE.notify_one();
 }

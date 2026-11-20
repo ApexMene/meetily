@@ -37,6 +37,10 @@
   .field .hint { color:var(--muted); font-size:12px; }
   #sstatus { font-size:12px; margin-left:8px; }
   h2.section { font-size:13px; margin:18px 18px 0; }
+  .hrow { display:flex; gap:10px; font-size:13px; margin:4px 0; }
+  .hrow .dot { width:9px; height:9px; border-radius:50%; margin-top:5px; flex:0 0 auto; }
+  .hrow.ok .dot { background:var(--ok); } .hrow.ko .dot { background:var(--err); }
+  .hrow .n { width:200px; flex:0 0 auto; } .hrow.ko .d { color:var(--err); } .hrow .d { color:var(--muted); }
   .spin { display:inline-block; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
 </style>
@@ -53,7 +57,14 @@
     <input id="shortcut" placeholder="Ctrl+Alt+M" size="16"><span class="hint">premi i tasti qui dentro; vuoto = nessuna</span></div>
   <div class="field"><label for="days">Cancella l'audio dopo (giorni)</label>
     <input id="days" type="number" min="0" max="3650" style="width:80px"><span class="hint">trascrizione e resoconto restano; 0 = mai</span></div>
+  <div class="field"><label for="autostart">Avvia con Windows</label>
+    <input id="autostart" type="checkbox"><span class="hint">parte nascosta, solo icona vicino all'orologio</span></div>
   <div class="field"><button class="primary" id="save">Salva</button><span id="sstatus"></span></div>
+</section>
+<section class="settings">
+  <h2>Stato sistema <span class="hint" id="hcheck" style="font-weight:normal;color:var(--muted)"></span></h2>
+  <div id="health"><span class="hint">Primo controllo tra poco dopo l'avvio...</span></div>
+  <div class="field"><button id="hrun">Ricontrolla ora</button></div>
 </section>
 <h2 class="section">Resoconti Notion</h2>
 <main id="list"><div class="empty">Caricamento...</div></main>
@@ -124,7 +135,28 @@
   }
   document.getElementById('refresh').onclick = load;
   var sc = document.getElementById('shortcut'), days = document.getElementById('days'), st = document.getElementById('sstatus');
-  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; });
+  var auto = document.getElementById('autostart');
+  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; });
+  function renderHealth(r) {
+    var box = document.getElementById('health');
+    if (!r.checks || !r.checks.length) return;
+    box.textContent = '';
+    r.checks.forEach(function (c) {
+      var row = el('div', 'hrow ' + (c.ok ? 'ok' : 'ko'));
+      row.appendChild(el('span', 'dot'));
+      row.appendChild(el('span', 'n', c.name));
+      row.appendChild(el('span', 'd', c.detail));
+      box.appendChild(row);
+    });
+    document.getElementById('hcheck').textContent = r.checked_at ? '· controllato ' + fmt(r.checked_at) : '';
+  }
+  invoke('health_status').then(renderHealth);
+  setInterval(function () { invoke('health_status').then(renderHealth); }, 15000);
+  document.getElementById('hrun').onclick = function () {
+    var b = this; b.disabled = true; b.textContent = 'Controllo... (fino a 1 min)';
+    invoke('health_run').then(function (r) { renderHealth(r); b.disabled = false; b.textContent = 'Ricontrolla ora'; },
+      function () { b.disabled = false; b.textContent = 'Ricontrolla ora'; });
+  };
   sc.addEventListener('keydown', function (e) {
     if (e.key === 'Tab') return;
     e.preventDefault();
@@ -138,7 +170,7 @@
   });
   document.getElementById('save').onclick = function () {
     st.style.color = ''; st.textContent = 'Salvo...';
-    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)) } })
+    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked } })
       .then(function () { st.style.color = 'var(--ok)'; st.textContent = 'Salvato'; },
             function (e) { st.style.color = 'var(--err)'; st.textContent = String(e); });
   };
