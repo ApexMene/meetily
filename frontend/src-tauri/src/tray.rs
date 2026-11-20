@@ -49,6 +49,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             }
         }
         "check_updates" => check_updates_handler(app),
+        "notion_jobs" => crate::notion_agent::open_jobs_window(app),
         "quit" => app.exit(0),
         _ => {}
     }
@@ -404,6 +405,7 @@ fn build_menu<R: Runtime>(
     builder
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
+        .item(&MenuItemBuilder::with_id("notion_jobs", "Resoconti Notion").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
         .item(&MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)

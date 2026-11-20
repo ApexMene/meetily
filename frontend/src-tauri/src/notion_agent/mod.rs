@@ -322,6 +322,14 @@ fn list_jobs(base: &Path) -> Vec<(PathBuf, Job)> {
         .collect()
 }
 
+static RUNNING: LazyLock<std::sync::Mutex<Option<String>>> = LazyLock::new(|| std::sync::Mutex::new(None));
+
+fn set_running(meeting_id: Option<&str>) {
+    if let Ok(mut running) = RUNNING.lock() {
+        *running = meeting_id.map(str::to_string);
+    }
+}
+
 async fn run_due_jobs<R: Runtime>(app: &AppHandle<R>, base: &Path, config: &AgentConfig) {
     // Never run the agent while a meeting is being recorded: it competes for CPU and network.
     if crate::audio::recording_commands::is_recording().await {
@@ -335,7 +343,10 @@ async fn run_due_jobs<R: Runtime>(app: &AppHandle<R>, base: &Path, config: &Agen
             continue;
         }
         log::info!("notion-agent: processing {} (attempt {})", job.meeting_id, job.attempts + 1);
-        match process(app, base, config, &job.meeting_id).await {
+        set_running(Some(&job.meeting_id));
+        let result = process(app, base, config, &job.meeting_id).await;
+        set_running(None);
+        match result {
             Ok(outcome) => {
                 let done = job_path(base, "done", &job.meeting_id);
                 let record = serde_json::json!({ "meeting_id": job.meeting_id, "finished": Utc::now(), "outcome": outcome });
@@ -619,4 +630,155 @@ mod tests {
     fn sanitizes_ids() {
         assert_eq!(sanitize("meeting-a/b:c"), "meeting-a_b_c");
     }
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Fork: "Resoconti Notion" window — job states, retry.
+
+/// One row of the jobs window.
+#[derive(Debug, Serialize)]
+pub struct JobView {
+    meeting_id: String,
+    title: String,
+    /// Meeting save time (RFC3339 UTC).
+    created_at: String,
+    /// waiting | queued | running | retrying | ok | skipped
+    state: String,
+    attempts: u32,
+    next_attempt: Option<DateTime<Utc>>,
+    last_error: Option<String>,
+    finished: Option<String>,
+    summary_url: Option<String>,
+    tasks_created: Option<i64>,
+    note: Option<String>,
+}
+
+/// Every meeting the agent knows about (last 7 days, newest first).
+#[tauri::command]
+pub async fn notion_agent_jobs<R: Runtime>(app: AppHandle<R>) -> Result<Vec<JobView>, String> {
+    let base = base_dir(&app).ok_or("no app data dir")?;
+    let config = load_config(&base);
+    let pool = pool(&app).ok_or("database not ready")?;
+    let rows = sqlx::query("SELECT id, title, created_at FROM meetings")
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let running = RUNNING.lock().ok().and_then(|r| r.clone());
+    let recording = crate::audio::recording_commands::is_recording().await;
+    let lookback = Utc::now() - ChronoDuration::days(SCAN_LOOKBACK_DAYS);
+    let since = config.since.map_or(lookback, |since| since.max(lookback));
+    let mut views = Vec::new();
+    for row in rows {
+        let id: String = row.try_get("id").unwrap_or_default();
+        let title: String = row.try_get("title").unwrap_or_default();
+        let created_at: String = row.try_get("created_at").unwrap_or_default();
+        let Ok(created) = DateTime::parse_from_rfc3339(&created_at).map(|d| d.with_timezone(&Utc)) else {
+            continue;
+        };
+        let mut view = JobView {
+            meeting_id: id.clone(),
+            title,
+            created_at,
+            state: String::new(),
+            attempts: 0,
+            next_attempt: None,
+            last_error: None,
+            finished: None,
+            summary_url: None,
+            tasks_created: None,
+            note: None,
+        };
+        let done = job_path(&base, "done", &id);
+        let queued = job_path(&base, "queue", &id);
+        if let Some(record) = std::fs::read(&done).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+            let outcome = record.get("outcome").cloned().unwrap_or_default();
+            view.state = outcome.get("status").and_then(|v| v.as_str()).unwrap_or("ok").to_string();
+            view.finished = record.get("finished").and_then(|v| v.as_str()).map(str::to_string);
+            view.summary_url = outcome.get("summary_url").and_then(|v| v.as_str()).map(str::to_string);
+            view.tasks_created = outcome.get("tasks_created").and_then(|v| v.as_i64());
+            view.note = outcome.get("note").and_then(|v| v.as_str()).map(str::to_string);
+        } else if let Some(job) = std::fs::read(&queued).ok().and_then(|b| serde_json::from_slice::<Job>(&b).ok()) {
+            view.state = if running.as_deref() == Some(id.as_str()) {
+                "running"
+            } else if job.attempts > 0 {
+                "retrying"
+            } else {
+                "queued"
+            }
+            .to_string();
+            view.attempts = job.attempts;
+            view.next_attempt = job.next_attempt;
+            view.last_error = job.last_error;
+            if recording && view.state != "running" {
+                view.note = Some("parte a fine registrazione".into());
+            }
+        } else if created >= since {
+            view.state = "waiting".into();
+            view.note = Some("in coda tra poco".into());
+        } else {
+            continue; // older than the agent: never sent
+        }
+        views.push(view);
+    }
+    views.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(views)
+}
+
+/// Runs a meeting again now: clears a finished result or a retry wait.
+#[tauri::command]
+pub async fn notion_agent_retry<R: Runtime>(app: AppHandle<R>, meeting_id: String) -> Result<(), String> {
+    let base = base_dir(&app).ok_or("no app data dir")?;
+    if RUNNING.lock().ok().and_then(|r| r.clone()).as_deref() == Some(meeting_id.as_str()) {
+        return Err("gia' in corso".into());
+    }
+    let _ = std::fs::remove_file(job_path(&base, "done", &meeting_id));
+    let job = Job { meeting_id: meeting_id.clone(), ..Default::default() };
+    write_json(&job_path(&base, "queue", &meeting_id), &job).map_err(|e| e.to_string())?;
+    log::info!("notion-agent: retry requested for {}", meeting_id);
+    WAKE.notify_one();
+    Ok(())
+}
+
+/// Opens a Notion page in the default browser / Notion app.
+#[tauri::command]
+pub async fn notion_agent_open_url(url: String) -> Result<(), String> {
+    let ok = url.starts_with("https://") && !url.contains(['"', ' ', '\n', '&', '|', '^', '<', '>']);
+    if !ok {
+        return Err("url non valido".into());
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub const JOBS_LABEL: &str = "notion-jobs";
+
+/// Shows the "Resoconti Notion" window (tray menu, meeting bar).
+pub fn open_jobs_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(JOBS_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let built = tauri::WebviewWindowBuilder::new(app, JOBS_LABEL, tauri::WebviewUrl::App("notion-jobs.html".into()))
+        .title("Meetily · Resoconti Notion")
+        .inner_size(760.0, 540.0)
+        .min_inner_size(520.0, 320.0)
+        .center()
+        .build();
+    if let Err(error) = built {
+        log::warn!("notion-agent: cannot open jobs window: {}", error);
+    }
+}
+
+#[tauri::command]
+pub async fn notion_agent_open_jobs<R: Runtime>(app: AppHandle<R>) {
+    open_jobs_window(&app);
 }

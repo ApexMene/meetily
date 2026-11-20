@@ -1,0 +1,113 @@
+<!doctype html>
+<!-- Fork: "Resoconti Notion" window (notion_agent). Plain HTML: no app layout. -->
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Meetily · Resoconti Notion</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --line:#e5e7eb; --card:#f6f8fa;
+    --ok:#1a7f37; --err:#cf222e; --run:#0969da; --wait:#9a6700; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1e1f22; --fg:#e6e6e6; --muted:#9aa0a6; --line:#33363b;
+    --card:#26282c; --ok:#3fb950; --err:#f85149; --run:#58a6ff; --wait:#d29922; } }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:14px "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  header .sub { color:var(--muted); font-size:12px; }
+  main { padding:8px 18px 18px; }
+  .row { display:flex; gap:12px; align-items:flex-start; padding:12px 0; border-bottom:1px solid var(--line); }
+  .badge { flex:0 0 auto; font-size:12px; font-weight:600; padding:3px 9px; border-radius:10px; background:var(--card); white-space:nowrap; }
+  .ok .badge { color:var(--ok); } .error .badge { color:var(--err); } .running .badge { color:var(--run); }
+  .wait .badge { color:var(--wait); } .skipped .badge { color:var(--muted); }
+  .info { flex:1; min-width:0; }
+  .title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .detail { font-size:12px; margin-top:4px; word-break:break-word; }
+  .error .detail { color:var(--err); }
+  .actions { display:flex; gap:6px; flex:0 0 auto; }
+  button { border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px; padding:5px 10px;
+    font:inherit; font-size:12px; cursor:pointer; }
+  button:hover { border-color:var(--muted); }
+  button.primary { background:#2383e2; border-color:#2383e2; color:#fff; }
+  .empty { color:var(--muted); padding:40px 0; text-align:center; }
+  .spin { display:inline-block; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Resoconti Notion</h1>
+  <span class="sub" id="updated"></span>
+  <button id="refresh">Aggiorna</button>
+</header>
+<main id="list"><div class="empty">Caricamento...</div></main>
+<script>
+(function () {
+  function invoke(cmd, args) { return window.__TAURI_INTERNALS__.invoke(cmd, args || {}); }
+  var list = document.getElementById('list');
+  var LABELS = {
+    ok: ['ok', 'Scritto in Notion'], skipped: ['skipped', 'Saltato'], running: ['running', 'Claude sta scrivendo'],
+    queued: ['wait', 'In coda'], waiting: ['wait', 'In attesa'], retrying: ['error', 'Errore, riprovo'], error: ['error', 'Errore']
+  };
+  function fmt(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }) + ' ' +
+      d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  }
+  function inMinutes(iso) {
+    var m = Math.round((new Date(iso) - Date.now()) / 60000);
+    return m <= 0 ? 'a breve' : 'tra ' + m + ' min';
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function render(jobs) {
+    list.textContent = '';
+    if (!jobs.length) { list.appendChild(el('div', 'empty', 'Nessun meeting negli ultimi 7 giorni.')); return; }
+    jobs.forEach(function (j) {
+      var lab = LABELS[j.state] || ['wait', j.state];
+      var row = el('div', 'row ' + lab[0]);
+      var badge = el('span', 'badge', lab[1]);
+      if (j.state === 'running') { var s = el('span', 'spin', '↻'); badge.prepend(s, ' '); }
+      row.appendChild(badge);
+      var info = el('div', 'info');
+      info.appendChild(el('div', 'title', j.title || j.meeting_id));
+      var meta = 'Meeting del ' + fmt(j.created_at);
+      if (j.finished) meta += ' · finito ' + fmt(j.finished);
+      if (j.attempts) meta += ' · tentativi: ' + j.attempts;
+      if (j.state === 'retrying' && j.next_attempt) meta += ' · prossimo ' + inMinutes(j.next_attempt);
+      info.appendChild(el('div', 'meta', meta));
+      var detail = j.last_error || j.note || '';
+      if (j.state === 'ok' && j.tasks_created != null) detail = j.tasks_created + ' task create' + (j.note ? ' · ' + j.note : '');
+      if (detail) info.appendChild(el('div', 'detail', detail));
+      row.appendChild(info);
+      var actions = el('div', 'actions');
+      if (j.summary_url) {
+        var open = el('button', 'primary', 'Apri in Notion');
+        open.onclick = function () { invoke('notion_agent_open_url', { url: j.summary_url }); };
+        actions.appendChild(open);
+      }
+      if (j.state !== 'running') {
+        var retry = el('button', '', j.state === 'ok' ? 'Rifai' : 'Riprova ora');
+        retry.title = j.state === 'ok' ? 'Claude riscrive il resoconto (aggiorna la pagina esistente)' : 'Chiama Claude adesso';
+        retry.onclick = function () {
+          if (j.state === 'ok' && !confirm('Rifare il resoconto di questo meeting?')) return;
+          retry.disabled = true;
+          invoke('notion_agent_retry', { meetingId: j.meeting_id }).then(load, function (e) { alert(e); retry.disabled = false; });
+        };
+        actions.appendChild(retry);
+      }
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+  function load() {
+    invoke('notion_agent_jobs').then(function (jobs) {
+      render(jobs);
+      document.getElementById('updated').textContent = 'aggiornato ' + new Date().toLocaleTimeString('it-IT');
+    }, function (e) { list.textContent = ''; list.appendChild(el('div', 'empty', 'Errore: ' + e)); });
+  }
+  document.getElementById('refresh').onclick = load;
+  load(); setInterval(load, 5000);
+})();
+</script>
+</body>
+</html>

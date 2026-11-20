@@ -48,7 +48,8 @@
     $('sub').textContent = 'Trascrizione salvata. Il resoconto va in Notion appena pronto.' +
       (key ? ' ' + key + ' per registrare.' : '');
     $('stop').className = 'hidden';
-    $('open').textContent = 'Apri meeting';
+    $('open').textContent = 'Stato resoconto';
+    $('open').onclick = function () { invoke('notion_agent_open_jobs'); invoke('meeting_pill_close'); };
     $('mdot').className = 'dot off';
     $('mclock').textContent = 'Salvato';
     $('min').className = 'hidden';
