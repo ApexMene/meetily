@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Fork: always-on-top meeting bar (meeting_detector). Plain HTML: no app layout. -->
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Meetily</title>
+<link rel="stylesheet" href="pill.css">
+</head>
+<body>
+<div class="pill" id="pill">
+  <img src="icon_128x128.png" alt="" class="logo">
+  <div class="text">
+    <div class="title"><span class="dot" id="dot"></span><span id="title">Trascrizione in corso</span> <span id="clock" class="clock"></span></div>
+    <div class="sub" id="sub"></div>
+  </div>
+  <button class="primary" id="open">Apri trascrizione</button>
+  <button class="secondary" id="stop">Stop</button>
+  <button class="close" id="min" title="Riduci">&minus;</button>
+  <button class="close" id="close" title="Nascondi">&times;</button>
+</div>
+<div class="mini hidden" id="mini" title="Clic per ingrandire, trascina per spostare">
+  <span class="dot" id="mdot"></span><span class="clock" id="mclock"></span>
+  <img src="icon_128x128.png" alt="" class="mlogo">
+</div>
+<script src="pill.js"></script>
+</body>
+</html>

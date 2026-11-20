@@ -46,6 +46,8 @@ pub mod custom_models; // Fork: user-added transcription and summary models
 pub mod database;
 pub mod doodle;
 pub mod notifications;
+pub mod meeting_detector; // Fork: auto start/stop on meeting mic use
+pub mod notion_agent; // Fork: post-meeting Notion agent (via Claude Code)
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;
@@ -565,6 +567,16 @@ pub fn run() {
             );
 
             tray::focus_main_window(app);
+            // Fork: clicking a Meetily notification relaunches the app; while recording, show
+            // the live transcript page.
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if crate::audio::recording_commands::is_recording().await {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.eval("if (window.location.pathname !== '/') window.location.assign('/')");
+                    }
+                }
+            });
         }));
     }
 
@@ -575,6 +587,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -711,6 +724,10 @@ pub fn run() {
             tauri::async_runtime::block_on(custom_models::init(_app.handle()));
             // Fork: load the Claude Code provider settings.
             tauri::async_runtime::block_on(claude_code::init(_app.handle()));
+            // Fork: post-meeting Notion agent worker (persistent queue + retries).
+            notion_agent::start(_app.handle().clone());
+            // Fork: start/stop recording automatically when a meeting app uses the microphone.
+            meeting_detector::start(_app.handle().clone());
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
@@ -737,6 +754,12 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            // Fork: meeting bar buttons (meeting_detector)
+            meeting_detector::meeting_pill_open,
+            meeting_detector::meeting_pill_stop,
+            meeting_detector::meeting_pill_close,
+            meeting_detector::meeting_pill_drag,
+            meeting_detector::meeting_pill_compact,
             start_recording,
             stop_recording,
             is_recording,

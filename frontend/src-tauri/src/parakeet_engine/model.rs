@@ -52,6 +52,20 @@ pub struct ParakeetModel {
     vocab: Vec<String>,
     blank_idx: i32,
     vocab_size: usize,
+    /// Fork: tokens the decoder may emit. Only Latin-script tokens (Italian/English), so the
+    /// multilingual model can't drift into Cyrillic or Greek.
+    allowed: Vec<bool>,
+}
+
+/// Fork: true when every character of a vocabulary token is Latin script, digits or punctuation.
+pub(crate) fn is_latin_token(token: &str) -> bool {
+    token.chars().all(|c| {
+        (c as u32) <= 0x024F // Basic Latin, Latin-1, Latin Extended-A/B (accents)
+            || ('\u{1E00}'..='\u{1EFF}').contains(&c) // Latin Extended Additional
+            || ('\u{2000}'..='\u{206F}').contains(&c) // general punctuation
+            || c == '\u{2581}' // sentencepiece word marker
+            || c == '\u{20AC}' // euro sign
+    })
 }
 
 impl Drop for ParakeetModel {
@@ -79,6 +93,7 @@ impl ParakeetModel {
             encoder,
             decoder_joint,
             preprocessor,
+            allowed: vocab.iter().map(|t| is_latin_token(t)).collect(),
             vocab,
             blank_idx,
             vocab_size,
@@ -378,6 +393,9 @@ impl ParakeetModel {
             let token = vocab_logits
                 .iter()
                 .enumerate()
+                .filter(|(idx, _)| {
+                    *idx as i32 == self.blank_idx || self.allowed.get(*idx).copied().unwrap_or(true)
+                })
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(idx, _)| idx as i32)
                 .unwrap_or(self.blank_idx);
@@ -484,5 +502,20 @@ impl ParakeetModel {
         })?;
 
         Ok(timestamped_result)
+    }
+}
+
+#[cfg(test)]
+mod latin_filter_tests {
+    use super::is_latin_token;
+
+    #[test]
+    fn keeps_italian_and_english_blocks_cyrillic_and_greek() {
+        assert!(is_latin_token(" perché"));
+        assert!(is_latin_token("ità"));
+        assert!(is_latin_token(" meeting,"));
+        assert!(is_latin_token("<blk>"));
+        assert!(!is_latin_token(" на"));
+        assert!(!is_latin_token(" τ"));
     }
 }

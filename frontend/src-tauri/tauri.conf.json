@@ -75,6 +75,16 @@
                             ]
                         }
                     ]
+                },
+                {
+                    "identifier": "meeting-pill",
+                    "description": "Fork: meeting bar (only its own commands)",
+                    "windows": [
+                        "meeting-pill"
+                    ],
+                    "permissions": [
+                        "core:default"
+                    ]
                 }
             ]
         }
@@ -114,7 +124,11 @@
         ],
         "linux": {
             "deb": {
-                "depends": ["libvulkan1", "libpulse0", "libasound2"]
+                "depends": [
+                    "libvulkan1",
+                    "libpulse0",
+                    "libasound2"
+                ]
             }
         },
         "macOS": {
