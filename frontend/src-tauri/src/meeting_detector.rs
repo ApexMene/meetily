@@ -188,6 +188,7 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
         load_config(app).shortcut.trim().replace('+', "%2B")
     );
     let (width, height) = pill_size(prefs.compact);
+    let title = if mode == "stopped" { "Meetily · Meeting terminato" } else { "Meetily · Registrazione in corso" };
     if mode == "stopped" {
         schedule_pill_close(app, generation);
     }
@@ -195,6 +196,8 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
     if let Some(window) = app.get_webview_window(PILL_LABEL) {
         let _ = window.eval(&format!("location.replace({:?})", format!("/{}", url)));
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        let _ = window.set_title(title);
+        let _ = window.unminimize();
         return;
     }
     let default_pos = app
@@ -214,14 +217,14 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
         _ => default_pos,
     };
     let built = tauri::WebviewWindowBuilder::new(app, PILL_LABEL, tauri::WebviewUrl::App(url.into()))
-        .title("Meetily")
+        .title(title)
         .inner_size(width, height)
         .position(x, y)
         .decorations(false)
         .transparent(true)
         .shadow(false)
         .always_on_top(true)
-        .skip_taskbar(true)
+        .skip_taskbar(false) // like Teams: its own thumbnail in the taskbar group and Alt+Tab
         .resizable(false)
         .focused(false)
         .build();
@@ -303,8 +306,16 @@ pub async fn meeting_pill_stop<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
+/// Bar "x": while recording, minimise to the taskbar (it stays findable there, like Teams);
+/// otherwise close.
 #[tauri::command]
 pub async fn meeting_pill_close<R: Runtime>(app: AppHandle<R>) {
+    if crate::audio::recording_commands::is_recording().await {
+        if let Some(window) = app.get_webview_window(PILL_LABEL) {
+            let _ = window.minimize();
+            return;
+        }
+    }
     close_pill(&app);
 }
 
