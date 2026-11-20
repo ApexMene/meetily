@@ -46,6 +46,8 @@ pub mod custom_models; // Fork: user-added transcription and summary models
 pub mod database;
 pub mod doodle;
 pub mod notifications;
+pub mod meeting_detector; // Fork: auto start/stop on meeting mic use
+pub mod notion_agent; // Fork: post-meeting Notion agent (via Claude Code)
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;
@@ -565,6 +567,16 @@ pub fn run() {
             );
 
             tray::focus_main_window(app);
+            // Fork: clicking a Meetily notification relaunches the app; while recording, show
+            // the live transcript page.
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if crate::audio::recording_commands::is_recording().await {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.eval("if (window.location.pathname !== '/') window.location.assign('/')");
+                    }
+                }
+            });
         }));
     }
 
@@ -711,6 +723,10 @@ pub fn run() {
             tauri::async_runtime::block_on(custom_models::init(_app.handle()));
             // Fork: load the Claude Code provider settings.
             tauri::async_runtime::block_on(claude_code::init(_app.handle()));
+            // Fork: post-meeting Notion agent worker (persistent queue + retries).
+            notion_agent::start(_app.handle().clone());
+            // Fork: start/stop recording automatically when a meeting app uses the microphone.
+            meeting_detector::start(_app.handle().clone());
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");

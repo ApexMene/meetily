@@ -120,6 +120,11 @@ async fn installation() -> Result<Installation, String> {
     Ok(found)
 }
 
+/// Fork: the resolved installation, for the post-meeting Notion agent (`crate::notion_agent`).
+pub(crate) async fn agent_installation() -> Result<Installation, String> {
+    installation().await
+}
+
 async fn forget_installation() {
     STATE.lock().await.installation = None;
 }
