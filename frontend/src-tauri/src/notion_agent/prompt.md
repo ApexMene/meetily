@@ -58,6 +58,14 @@ Corpo (Notion markdown, ZERO emoji, frasi brevi, italiano):
 - Solo le task per cui il progetto non era chiaro (ometti la sezione se vuota).
 ```
 
+## Formattazione (vale per resoconto E task)
+- ZERO emoji, ovunque: titoli, proprieta', testo, elenchi. Niente simboli decorativi.
+- Usa SOLO: heading (`#`, `##`, `###`, `####`) e bullet list (`-`, anche annidate). Testo semplice nei bullet.
+- Gerarchia: `##` per le sezioni del resoconto, `###` per i sotto-temi (es. un progetto), `####` solo se serve un terzo livello.
+  `#` solo se devi raggruppare macro-blocchi molto diversi.
+- Niente callout, tabelle, toggle, citazioni, divider, colori, grassetti a raffica. Un concetto per bullet, frasi brevi.
+- Ordine fisso delle sezioni come nel formato sopra; ometti una sezione solo se e' indicato.
+
 ## Regole task
 Crea una task SOLO per:
 - (a) azioni che deve fare Gianluca (assegnate a lui, o che lui si prende: "lo faccio io", "ci penso io",
