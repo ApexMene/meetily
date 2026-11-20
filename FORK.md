@@ -23,6 +23,10 @@ non vanno in conflitto:
   Codice nuovo isolato in `frontend/src-tauri/src/custom_models/` e
   `frontend/src/components/CustomModels/`; nei file upstream solo agganci piccoli
   (marcati con il commento `Fork:`), per ridurre i conflitti nei merge.
+- **Provider "Claude Code"** per i riassunti: usa la CLI Claude Code dell'utente (login con
+  l'account Claude, nessuna API key), nativa o in WSL. Dettagli in
+  [docs/fork/claude-code-provider.md](docs/fork/claude-code-provider.md).
+  Codice in `frontend/src-tauri/src/claude_code/` e `frontend/src/components/ClaudeCode/`.
 
 Durante un merge da upstream, cercare `Fork:` per ritrovare tutti gli agganci.
 

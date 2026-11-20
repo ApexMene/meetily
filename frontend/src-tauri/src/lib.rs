@@ -39,9 +39,10 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod claude_code; // Fork: Claude Code summary provider
 pub mod config;
 pub mod console_utils;
-pub mod custom_models; // Fork: user-added transcription models
+pub mod custom_models; // Fork: user-added transcription and summary models
 pub mod database;
 pub mod doodle;
 pub mod notifications;
@@ -708,6 +709,8 @@ pub fn run() {
 
             // Fork: load the custom transcription model registry (engines wait for it).
             tauri::async_runtime::block_on(custom_models::init(_app.handle()));
+            // Fork: load the Claude Code provider settings.
+            tauri::async_runtime::block_on(claude_code::init(_app.handle()));
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
@@ -805,6 +808,10 @@ pub fn run() {
             custom_models::commands::custom_models_set_token,
             custom_models::commands::custom_models_clear_token,
             custom_models::commands::custom_models_open_folder,
+            // Fork: Claude Code summary provider
+            claude_code::commands::claude_code_get_settings,
+            claude_code::commands::claude_code_save_config,
+            claude_code::commands::claude_code_check,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,

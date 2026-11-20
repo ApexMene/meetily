@@ -220,6 +220,8 @@ pub enum LLMProvider {
     OpenRouter,
     BuiltInAI,
     CustomOpenAI,
+    /// Fork: the user's Claude Code CLI (Claude account login, no API key).
+    ClaudeCode,
 }
 
 impl LLMProvider {
@@ -233,6 +235,7 @@ impl LLMProvider {
             "openrouter" => Ok(Self::OpenRouter),
             "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
             "custom-openai" => Ok(Self::CustomOpenAI),
+            crate::claude_code::PROVIDER_ID => Ok(Self::ClaudeCode),
             _ => Err(format!("Unsupported LLM provider: {}", s)),
         }
     }
@@ -298,6 +301,16 @@ pub(crate) async fn generate_summary(
         .map_err(|e| e.to_string());
     }
 
+    // Fork: Claude Code runs the user's CLI (no HTTP API, no API key).
+    if provider == &LLMProvider::ClaudeCode {
+        return crate::claude_code::generate(model_name, system_prompt, user_prompt, cancellation_token)
+            .await
+            .map(|content| LlmCompletion {
+                content,
+                reasoning_stripped: false,
+            });
+    }
+
     let (api_url, mut headers) = match provider {
         LLMProvider::OpenAI => (
             "https://api.openai.com/v1/chat/completions".to_string(),
@@ -344,9 +357,9 @@ pub(crate) async fn generate_summary(
             );
             ("https://api.anthropic.com/v1/messages".to_string(), header_map)
         }
-        LLMProvider::BuiltInAI => {
+        LLMProvider::BuiltInAI | LLMProvider::ClaudeCode => {
             // This case is handled earlier with early returns
-            unreachable!("BuiltInAI is handled before this match statement")
+            unreachable!("{:?} is handled before this match statement", provider)
         }
     };
 
@@ -988,5 +1001,6 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
         LLMProvider::CustomOpenAI => "Custom OpenAI",
+        LLMProvider::ClaudeCode => "Claude Code",
     }
 }
