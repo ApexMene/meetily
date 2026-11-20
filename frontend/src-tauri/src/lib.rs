@@ -760,6 +760,8 @@ pub fn run() {
             meeting_detector::meeting_pill_close,
             meeting_detector::meeting_pill_drag,
             meeting_detector::meeting_pill_compact,
+            meeting_detector::auto_settings_get,
+            meeting_detector::auto_settings_set,
             notion_agent::notion_agent_jobs,
             notion_agent::notion_agent_retry,
             notion_agent::notion_agent_open_url,

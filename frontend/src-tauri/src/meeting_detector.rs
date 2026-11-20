@@ -30,6 +30,9 @@ pub struct DetectorConfig {
     /// Global shortcut that starts/stops a recording from anywhere (e.g. "Ctrl+Alt+M").
     /// Empty = no shortcut. Read at app start.
     pub shortcut: String,
+    /// Recording audio files are deleted this many days after the meeting (transcript and
+    /// Notion recap stay). 0 = keep forever.
+    pub audio_retention_days: u32,
 }
 
 impl Default for DetectorConfig {
@@ -47,6 +50,7 @@ impl Default for DetectorConfig {
             .map(|s| s.to_string())
             .collect(),
             shortcut: "Ctrl+Alt+M".to_string(),
+            audio_retention_days: 30,
         }
     }
 }
@@ -337,19 +341,36 @@ pub fn shortcut_hint<R: Runtime>(app: &AppHandle<R>) -> String {
 }
 
 /// Registers the global start/stop shortcut from `auto-meeting.json`.
+static ACTIVE_SHORTCUT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 fn register_shortcut<R: Runtime>(app: &AppHandle<R>, config: &DetectorConfig) {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-    let text = config.shortcut.trim();
-    if text.is_empty() {
-        return;
+    if let Err(error) = try_register_shortcut(app, config.shortcut.trim()) {
+        log::warn!("meeting-detector: {}", error);
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app
+            .notification()
+            .builder()
+            .title("Meetily: scorciatoia non disponibile")
+            .body(format!("{} Cambiala da Meetily > Resoconti e impostazioni.", error))
+            .show();
     }
-    let shortcut = match text.parse::<Shortcut>() {
-        Ok(shortcut) => shortcut,
-        Err(error) => {
-            log::warn!("meeting-detector: invalid shortcut {:?}: {}", text, error);
-            return;
-        }
+}
+
+/// Registers `text` as the start/stop shortcut, replacing the current one.
+fn try_register_shortcut<R: Runtime>(app: &AppHandle<R>, text: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+    let shortcut = if text.is_empty() {
+        None
+    } else {
+        Some(text.parse::<Shortcut>().map_err(|e| format!("scorciatoia {:?} non valida: {}", text, e))?)
     };
+    let mut active = ACTIVE_SHORTCUT.lock().map_err(|e| e.to_string())?;
+    if let Some(old) = active.take() {
+        if let Ok(old) = old.parse::<Shortcut>() {
+            let _ = app.global_shortcut().unregister(old);
+        }
+    }
+    let Some(shortcut) = shortcut else { return Ok(()) };
     let result = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
         if event.state != ShortcutState::Pressed {
             return;
@@ -368,19 +389,95 @@ fn register_shortcut<R: Runtime>(app: &AppHandle<R>, config: &DetectorConfig) {
         });
     });
     match result {
-        Ok(()) => log::info!("meeting-detector: shortcut {} registered", text),
-        Err(error) => {
-            // Usually another app already owns it.
-            log::warn!("meeting-detector: cannot register shortcut {}: {}", text, error);
-            use tauri_plugin_notification::NotificationExt;
-            let _ = app
-                .notification()
-                .builder()
-                .title("Meetily: scorciatoia non disponibile")
-                .body(format!("{} e' gia' usata da un'altra app. Cambiala in auto-meeting.json.", text))
-                .show();
+        Ok(()) => {
+            log::info!("meeting-detector: shortcut {} registered", text);
+            *active = Some(text.to_string());
+            Ok(())
+        }
+        // Usually another app already owns it.
+        Err(error) => Err(format!("{} e' gia' usata da un'altra app ({}).", text, error)),
+    }
+}
+
+/// Deletes recording audio of meetings older than the retention (transcripts stay in the DB).
+async fn cleanup_audio<R: Runtime>(app: &AppHandle<R>) {
+    let days = load_config(app).audio_retention_days;
+    if days == 0 || crate::audio::recording_commands::is_recording().await {
+        return;
+    }
+    let Some(state) = app.try_state::<crate::state::AppState>() else { return };
+    let pool = state.db_manager.pool().clone();
+    let Ok(rows) = sqlx::query("SELECT folder_path, created_at FROM meetings WHERE folder_path IS NOT NULL")
+        .fetch_all(&pool)
+        .await
+    else {
+        return;
+    };
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
+    let (mut files, mut bytes) = (0u32, 0u64);
+    for row in rows {
+        use sqlx::Row;
+        let folder: String = row.try_get("folder_path").unwrap_or_default();
+        let created: String = row.try_get("created_at").unwrap_or_default();
+        let Ok(created) = chrono::DateTime::parse_from_rfc3339(&created) else { continue };
+        if created >= cutoff || folder.trim().is_empty() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let audio = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| ["mp4", "m4a", "wav", "webm", "mp3", "ogg"].contains(&e.to_ascii_lowercase().as_str()));
+            if !audio || !path.is_file() {
+                continue;
+            }
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    files += 1;
+                    bytes += size;
+                }
+                Err(error) => log::warn!("audio-cleanup: cannot delete {}: {}", path.display(), error),
+            }
         }
     }
+    if files > 0 {
+        log::info!("audio-cleanup: deleted {} audio files ({} MB) older than {} days", files, bytes / 1_048_576, days);
+    }
+}
+
+/// Settings shown in the "Resoconti e impostazioni" window.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AutoSettings {
+    shortcut: String,
+    audio_retention_days: u32,
+}
+
+#[tauri::command]
+pub async fn auto_settings_get<R: Runtime>(app: AppHandle<R>) -> AutoSettings {
+    let config = load_config(&app);
+    AutoSettings { shortcut: config.shortcut, audio_retention_days: config.audio_retention_days }
+}
+
+#[tauri::command]
+pub async fn auto_settings_set<R: Runtime>(app: AppHandle<R>, settings: AutoSettings) -> Result<(), String> {
+    let mut config = load_config(&app);
+    let shortcut = settings.shortcut.trim().to_string();
+    if shortcut != config.shortcut {
+        if let Err(error) = try_register_shortcut(&app, &shortcut) {
+            let _ = try_register_shortcut(&app, &config.shortcut); // put the old one back
+            return Err(error);
+        }
+        config.shortcut = shortcut;
+    }
+    config.audio_retention_days = settings.audio_retention_days.min(3650);
+    let path = config_path(&app).ok_or("no app data dir")?;
+    std::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap_or_default()).map_err(|e| e.to_string())?;
+    log::info!("meeting-detector: settings saved (shortcut {:?}, audio kept {} days)", config.shortcut, config.audio_retention_days);
+    cleanup_audio(&app).await;
+    Ok(())
 }
 
 pub fn start<R: Runtime>(app: AppHandle<R>) {
@@ -388,6 +485,14 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
         return;
     }
     register_shortcut(&app, &load_config(&app));
+    let cleanup_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        loop {
+            cleanup_audio(&cleanup_app).await;
+            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        }
+    });
     tauri::async_runtime::spawn(async move {
         let own_exe = std::env::current_exe()
             .ok()
