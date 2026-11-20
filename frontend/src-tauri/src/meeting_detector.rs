@@ -122,8 +122,8 @@ fn meeting_app(apps_in_use: &[String], config: &DetectorConfig, own_exe: &str) -
 const PILL_LABEL: &str = "meeting-pill";
 const PILL_WIDTH: f64 = 520.0;
 const PILL_HEIGHT: f64 = 76.0;
-/// How long each bar stays on screen before hiding itself (it never blocks the meeting app).
-const PILL_RECORDING_SECS: u64 = 25;
+/// Like Notion's bar: the recording bar stays for the whole meeting; the "stopped" bar hides
+/// itself after a few seconds.
 const PILL_STOPPED_SECS: u64 = 12;
 
 /// Shows the Notion-style bar at the top centre of the primary screen.
@@ -158,14 +158,14 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
         .focused(false)
         .build();
     match built {
-        Ok(_) => {
+        Ok(_) if mode == "stopped" => {
             let app = app.clone();
-            let secs = if mode == "stopped" { PILL_STOPPED_SECS } else { PILL_RECORDING_SECS };
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(secs)).await;
+                tokio::time::sleep(Duration::from_secs(PILL_STOPPED_SECS)).await;
                 close_pill(&app);
             });
         }
+        Ok(_) => {}
         Err(error) => log::warn!("meeting-detector: cannot show bar: {}", error),
     }
 }
@@ -269,6 +269,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                         }
                         // Stopped by the user (or failed): don't restart during this call.
                         log::info!("meeting-detector: recording ended outside the detector");
+                        show_pill(&app, "stopped", "");
                         phase = Phase::HandsOff;
                         continue;
                     }
