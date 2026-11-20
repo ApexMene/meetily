@@ -41,6 +41,11 @@ pub struct DetectorConfig {
     /// Parakeet model for the re-transcription. Empty = automatic (an installed "ultra" custom
     /// model if any, otherwise the live model).
     pub second_pass_model: String,
+    /// Optional second model (CTC, folder name under models/second-opinion) whose text Claude
+    /// merges with the main one. Empty = none.
+    pub second_opinion: String,
+    /// When the re-transcription was turned on: older meetings are never re-transcribed.
+    pub second_pass_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Default for DetectorConfig {
@@ -62,6 +67,8 @@ impl Default for DetectorConfig {
             start_with_windows: true,
             second_pass: "off".to_string(),
             second_pass_model: String::new(),
+            second_opinion: String::new(),
+            second_pass_since: None,
         }
     }
 }
@@ -470,6 +477,8 @@ pub struct AutoSettings {
     second_pass: String,
     #[serde(default)]
     second_pass_model: String,
+    #[serde(default)]
+    second_opinion: String,
 }
 
 /// Post-meeting re-transcription (see notion_agent::second_pass):
@@ -481,6 +490,16 @@ pub fn second_pass_mode<R: Runtime>(app: &AppHandle<R>) -> String {
         "full" => "full".into(),
         _ => "off".into(),
     }
+}
+
+/// Meetings created before this are not re-transcribed (None = no limit).
+pub fn second_pass_since<R: Runtime>(app: &AppHandle<R>) -> Option<chrono::DateTime<chrono::Utc>> {
+    load_config(app).second_pass_since
+}
+
+/// Second-opinion model folder name; empty = none.
+pub fn second_opinion<R: Runtime>(app: &AppHandle<R>) -> String {
+    load_config(app).second_opinion.trim().to_string()
 }
 
 /// Model chosen for the re-transcription; empty = automatic.
@@ -551,6 +570,7 @@ pub async fn auto_settings_get<R: Runtime>(app: AppHandle<R>) -> AutoSettings {
         start_with_windows: config.start_with_windows,
         second_pass: second_pass_mode(&app),
         second_pass_model: config.second_pass_model,
+        second_opinion: config.second_opinion,
     }
 }
 
@@ -568,9 +588,16 @@ pub async fn auto_settings_set<R: Runtime>(app: AppHandle<R>, settings: AutoSett
     config.audio_retention_days = settings.audio_retention_days.min(3650);
     config.start_with_windows = settings.start_with_windows;
     if ["full", "model", "off"].contains(&settings.second_pass.as_str()) {
+        if config.second_pass_since.is_none() || (second_pass_mode(&app) == "off" && settings.second_pass != "off") {
+            config.second_pass_since = Some(chrono::Utc::now());
+        }
         config.second_pass = settings.second_pass.clone();
     }
     config.second_pass_model = settings.second_pass_model.trim().chars().take(200).collect();
+    let opinion = settings.second_opinion.trim();
+    if opinion.is_empty() || crate::second_opinion::is_safe_name(opinion) {
+        config.second_opinion = opinion.to_string();
+    }
     apply_autostart(config.start_with_windows);
     let path = config_path(&app).ok_or("no app data dir")?;
     std::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap_or_default()).map_err(|e| e.to_string())?;

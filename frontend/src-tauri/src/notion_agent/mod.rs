@@ -71,6 +71,8 @@ pub struct AgentConfig {
     pub min_seconds: f64,
     /// Meetings created before this instant are never processed (set on first run).
     pub since: Option<DateTime<Utc>>,
+    /// Claude model for the transcript cleanup / merge after the re-transcription.
+    pub clean_model: String,
 }
 
 impl Default for AgentConfig {
@@ -83,6 +85,7 @@ impl Default for AgentConfig {
             test_mode: false,
             min_seconds: 120.0,
             since: None,
+            clean_model: "haiku".into(),
         }
     }
 }
@@ -672,6 +675,37 @@ fn parse_outcome(stdout: &str) -> Result<AgentOutcome, String> {
     }
 }
 
+/// Fork settings page: Claude models used after the meeting.
+#[derive(Serialize, Deserialize)]
+pub struct AgentModels {
+    pub recap_model: String,
+    pub clean_model: String,
+}
+
+const ALLOWED_MODELS: &[&str] = &["haiku", "sonnet", "opus"];
+
+#[tauri::command]
+pub async fn agent_models_get<R: Runtime>(app: AppHandle<R>) -> Result<AgentModels, String> {
+    let base = base_dir(&app).ok_or("no app data dir")?;
+    let config = load_config(&base);
+    Ok(AgentModels { recap_model: config.model, clean_model: config.clean_model })
+}
+
+#[tauri::command]
+pub async fn agent_models_set<R: Runtime>(app: AppHandle<R>, models: AgentModels) -> Result<(), String> {
+    let base = base_dir(&app).ok_or("no app data dir")?;
+    let path = base.join("config.json");
+    // Raw file, so values coming from .env are not copied into it.
+    let mut config: AgentConfig = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if ALLOWED_MODELS.contains(&models.recap_model.as_str()) {
+        config.model = models.recap_model;
+    }
+    if ALLOWED_MODELS.contains(&models.clean_model.as_str()) {
+        config.clean_model = models.clean_model;
+    }
+    write_json(&path, &config).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -912,6 +946,18 @@ async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeti
         return true;
     }
     let Some(pool) = pool(app) else { return true };
+    if let Some(since) = crate::meeting_detector::second_pass_since(app) {
+        let created: Option<String> = sqlx::query_scalar("SELECT created_at FROM meetings WHERE id = ?")
+            .bind(meeting_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+        let created = created.and_then(|c| DateTime::parse_from_rfc3339(&c).ok()).map(|d| d.with_timezone(&Utc));
+        if created.is_some_and(|c| c < since) {
+            return true; // recorded before the re-transcription was turned on
+        }
+    }
     let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
         .bind(meeting_id)
         .fetch_optional(&pool)
@@ -926,9 +972,10 @@ async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeti
     backup_live_transcript(&pool, meeting_id, Path::new(&folder)).await;
 
     let model = second_pass_model(app).await;
+    let alt_dir = crate::second_opinion::model_dir(app, &crate::meeting_detector::second_opinion(app));
     let started = std::time::Instant::now();
     log::info!("notion-agent: second pass ({:?}, {}) for {}", model, mode, meeting_id);
-    match crate::audio::retranscription::start_retranscription(app.clone(), meeting_id.to_string(), folder, None, model, Some("parakeet".to_string())).await {
+    match crate::audio::retranscription::start_retranscription_with_alt(app.clone(), meeting_id.to_string(), folder.clone(), None, model, Some("parakeet".to_string()), alt_dir).await {
         Ok(result) => log::info!(
             "notion-agent: second pass done for {}: {} segments in {:.0}s",
             meeting_id,
@@ -946,7 +993,7 @@ async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeti
     }
     if mode == "full" {
         let started = std::time::Instant::now();
-        match clean_transcript(&pool, config, meeting_id).await {
+        match clean_transcript(app, &pool, config, meeting_id, Path::new(&folder)).await {
             Ok((kept, dropped)) => log::info!(
                 "notion-agent: transcript cleaned for {}: {} segments kept, {} noise dropped in {:.0}s",
                 meeting_id,
@@ -1002,27 +1049,70 @@ async fn backup_live_transcript(pool: &sqlx::SqlitePool, meeting_id: &str, folde
 }
 
 const CLEAN_SYSTEM: &str = "You clean automatic speech transcripts. Answer only with the requested lines.";
-const CLEAN_PROMPT: &str = "This is the automatic transcript of a work meeting, split into numbered segments. \
+const CLEAN_PROMPT: &str = "# Transcript cleanup (edit freely; the segments are appended below)
+
+This is the automatic transcript of a work meeting, split into numbered segments.
 It may contain English technical terms on purpose (deploy, backlog, pull request, feedback...).
-The speech model sometimes mishears words, switches to the wrong language by mistake, or invents
+Speech models sometimes mishear words, switch to the wrong language by mistake, or invent
 phrases on noise and silence (fragments in unrelated languages or scripts, nonsense words).
+
+When a segment has two versions, A is the main model (multilingual, good with technical terms)
+and B a second model specialised in the meeting language (good with ordinary words, weak with
+foreign terms). Combine them: take the words of B where A is garbled, keep the technical terms
+and names of A. If B is nonsense, ignore it.
+
 For EACH segment write the most likely version of what was actually said:
 - keep the language the meeting is held in; fix only obvious errors (garbled words, wrong language);
 - keep technical terms, names and numbers; do not invent, summarize or add content;
 - if the segment is noise or meaningless write exactly: [noise]
-Output: one line per segment, same order, format \"n. text\". Nothing else.";
+Output: one line per segment, same order, format \"n. text\". Nothing else.
+";
+const CLEAN_PROMPT_FILE: &str = "transcript-cleanup.md";
+
+fn load_clean_prompt(base: &Path) -> String {
+    let path = base.join(CLEAN_PROMPT_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) if !text.trim().is_empty() => text,
+        _ => {
+            let _ = std::fs::create_dir_all(base);
+            let _ = std::fs::write(&path, CLEAN_PROMPT);
+            CLEAN_PROMPT.to_string()
+        }
+    }
+}
+
+/// Second-opinion texts from `transcripts.alt.json`, keyed by segment start (milliseconds).
+fn load_alt_texts(folder: &Path) -> std::collections::HashMap<i64, String> {
+    let Ok(bytes) = std::fs::read(folder.join("transcripts.alt.json")) else { return Default::default() };
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+    rows.iter()
+        .filter_map(|r| {
+            let start = r.get("start")?.as_f64()?;
+            let b = r.get("b")?.as_str()?.trim().to_string();
+            (!b.is_empty()).then(|| ((start * 1000.0).round() as i64, b))
+        })
+        .collect()
+}
 const CLEAN_CHUNK: usize = 60;
 
-/// Haiku pass over the re-transcribed segments. Returns (kept, dropped).
-async fn clean_transcript(pool: &sqlx::SqlitePool, config: &AgentConfig, meeting_id: &str) -> Result<(usize, usize), String> {
-    let rows = sqlx::query("SELECT id, transcript FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+/// Claude pass over the re-transcribed segments (merging the second opinion when present).
+/// Returns (kept, dropped).
+async fn clean_transcript<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, config: &AgentConfig, meeting_id: &str, folder: &Path) -> Result<(usize, usize), String> {
+    let base = base_dir(app).ok_or("no app data dir")?;
+    let prompt = load_clean_prompt(&base);
+    let alt = load_alt_texts(folder);
+    let rows = sqlx::query("SELECT id, transcript, audio_start_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
         .bind(meeting_id)
         .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
-    let segments: Vec<(String, String)> = rows
+    let segments: Vec<(String, String, Option<String>)> = rows
         .iter()
-        .map(|r| (r.try_get::<String, _>("id").unwrap_or_default(), r.try_get::<String, _>("transcript").unwrap_or_default()))
+        .map(|r| {
+            let start = r.try_get::<Option<f64>, _>("audio_start_time").ok().flatten();
+            let b = start.and_then(|s| alt.get(&((s * 1000.0).round() as i64)).cloned());
+            (r.try_get::<String, _>("id").unwrap_or_default(), r.try_get::<String, _>("transcript").unwrap_or_default(), b)
+        })
         .collect();
     if segments.is_empty() {
         return Ok((0, 0));
@@ -1030,11 +1120,15 @@ async fn clean_transcript(pool: &sqlx::SqlitePool, config: &AgentConfig, meeting
     let installation = crate::claude_code::agent_installation().await?;
     let mut updates: Vec<(String, Option<String>)> = Vec::new(); // None = drop
     for chunk in segments.chunks(CLEAN_CHUNK) {
-        let mut stdin = format!("{}\n\nSEGMENTI\n", CLEAN_PROMPT);
-        for (n, (_, text)) in chunk.iter().enumerate() {
-            stdin.push_str(&format!("{}. {}\n", n + 1, text.replace('\n', " ")));
+        let mut stdin = format!("{}\n\nSEGMENTS\n", prompt);
+        for (n, (_, text, b)) in chunk.iter().enumerate() {
+            match b {
+                Some(b) if b != text => stdin.push_str(&format!("{}. A: {} | B: {}\n", n + 1, text.replace('\n', " "), b.replace('\n', " "))),
+                _ => stdin.push_str(&format!("{}. {}\n", n + 1, text.replace('\n', " "))),
+            }
         }
-        let answer = match run_claude_text(&installation, config, CLEAN_MODEL, CLEAN_SYSTEM, stdin).await {
+        let model = if config.clean_model.trim().is_empty() { "haiku" } else { config.clean_model.trim() };
+        let answer = match run_claude_text(&installation, config, model, CLEAN_SYSTEM, stdin).await {
             Ok(answer) => answer,
             Err(error) => {
                 log::warn!("notion-agent: cleaning chunk failed, keeping it as is: {}", error);
@@ -1043,7 +1137,7 @@ async fn clean_transcript(pool: &sqlx::SqlitePool, config: &AgentConfig, meeting
         };
         match parse_clean_answer(&answer, chunk.len()) {
             Some(lines) => {
-                for ((id, original), line) in chunk.iter().zip(lines) {
+                for ((id, original, _), line) in chunk.iter().zip(lines) {
                     match line {
                         None => updates.push((id.clone(), None)),
                         Some(text) if text != *original => updates.push((id.clone(), Some(text))),
@@ -1067,7 +1161,6 @@ async fn clean_transcript(pool: &sqlx::SqlitePool, config: &AgentConfig, meeting
     Ok((segments.len() - dropped, dropped))
 }
 
-const CLEAN_MODEL: &str = "haiku";
 
 /// "n. testo" lines -> one entry per segment (None = noise). None when anything is missing.
 fn parse_clean_answer(answer: &str, expected: usize) -> Option<Vec<Option<String>>> {

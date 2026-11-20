@@ -43,6 +43,7 @@ pub mod claude_code; // Fork: Claude Code summary provider
 pub mod config;
 pub mod console_utils;
 pub mod custom_models; // Fork: user-added transcription and summary models
+pub use custom_models::second_opinion;
 pub mod database;
 pub mod doodle;
 pub mod notifications;
@@ -772,6 +773,11 @@ pub fn run() {
             health::health_status,
             health::health_run,
             meeting_detector::auto_settings_set,
+            notion_agent::agent_models_get,
+            notion_agent::agent_models_set,
+            second_opinion::second_opinion_list,
+            second_opinion::second_opinion_install,
+            second_opinion::prompts_open_folder,
             notion_agent::notion_agent_jobs,
             notion_agent::notion_agent_retry,
             notion_agent::notion_agent_open_url,
