@@ -410,6 +410,21 @@ struct MeetingInput {
 
 const WEEKDAYS: [&str; 7] = ["lunedi'", "martedi'", "mercoledi'", "giovedi'", "venerdi'", "sabato", "domenica"];
 
+/// Nearest quarter hour (ties go up).
+fn round_quarter(time: DateTime<Utc>) -> DateTime<Utc> {
+    const QUARTER: i64 = 15 * 60;
+    let secs = time.timestamp();
+    let rounded = (secs + QUARTER / 2).div_euclid(QUARTER) * QUARTER;
+    DateTime::from_timestamp(rounded, 0).unwrap_or(time)
+}
+
+/// Calendar slot for a meeting: both ends rounded to the quarter hour, at least 15 minutes long.
+fn calendar_slot(start: DateTime<Utc>, end: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+    let slot_start = round_quarter(start);
+    let slot_end = round_quarter(end).max(slot_start + ChronoDuration::minutes(15));
+    (slot_start, slot_end)
+}
+
 async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool) -> Result<MeetingInput, String> {
     let meeting = sqlx::query("SELECT title, created_at FROM meetings WHERE id = ?")
         .bind(meeting_id)
@@ -453,6 +468,7 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
         transcript.push_str(&format!("[{}] {}\n", label, text.trim()));
     }
 
+    let (calendar_start, calendar_end) = calendar_slot(start, saved);
     let local_start = start.with_timezone(&Local);
     let weekday = WEEKDAYS[local_start.format("%u").to_string().parse::<usize>().unwrap_or(1) - 1];
     let meta = serde_json::json!({
@@ -460,6 +476,15 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
         "title": title,
         "start_utc": start.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         "end_utc": saved.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        // Real times rounded to the nearest quarter hour (15:07 -> 15:00, 15:27 -> 15:30): what
+        // goes in the Notion Calendar property.
+        "calendar_start_utc": calendar_start.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "calendar_end_utc": calendar_end.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "calendar_local": format!(
+            "{} - {}",
+            calendar_start.with_timezone(&Local).format("%H:%M"),
+            calendar_end.with_timezone(&Local).format("%H:%M")
+        ),
         "meeting_date_local": format!("{} ({})", local_start.format("%Y-%m-%d"), weekday),
         "timezone": "Europe/Rome",
         "test_mode": test_mode,
@@ -616,6 +641,15 @@ mod tests {
     fn cli_error_is_retried() {
         assert!(parse_outcome(r#"{"is_error":true,"result":"API Error: ENETUNREACH"}"#).is_err());
         assert!(parse_outcome("not json").is_err());
+    }
+
+    #[test]
+    fn calendar_rounds_to_quarters() {
+        let at = |h: u32, m: u32| DateTime::parse_from_rfc3339(&format!("2026-11-20T{:02}:{:02}:00Z", h, m)).unwrap().with_timezone(&Utc);
+        assert_eq!(round_quarter(at(14, 7)), at(14, 0));
+        assert_eq!(round_quarter(at(14, 27)), at(14, 30));
+        assert_eq!(round_quarter(at(14, 53)), at(15, 0));
+        assert_eq!(calendar_slot(at(14, 2), at(14, 5)), (at(14, 0), at(14, 15)));
     }
 
     #[test]

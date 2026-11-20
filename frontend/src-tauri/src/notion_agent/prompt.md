@@ -33,7 +33,9 @@ Proprieta':
 - Type: MEETING SUMMARY se hai compilato la card esistente; MEETING se l'hai creata tu. Status: Done; Sync_Source: {{SYNC_SOURCE}}
 - Areas: Work (sempre)
 - Project: i progetti principali discussi (solo se chiari, max 3)
-- Notion Calendar: start_utc -> end_utc del META (is_datetime=1)
+- Notion Calendar: `calendar_start_utc` -> `calendar_end_utc` del META (is_datetime=1): orari reali gia'
+  arrotondati al quarto d'ora. Usali SEMPRE, anche quando compili una card esistente (sovrascrivi
+  l'orario pianificato con quello reale). Non ricalcolarli.
 - Other: `{"meetily_id":"<meetily_id>","source":"meetily"}`
 - Icona: icons/groups_blue
 
