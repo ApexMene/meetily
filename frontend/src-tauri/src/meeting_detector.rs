@@ -33,6 +33,8 @@ pub struct DetectorConfig {
     /// Recording audio files are deleted this many days after the meeting (transcript and
     /// Notion recap stay). 0 = keep forever.
     pub audio_retention_days: u32,
+    /// Start Meetily (in the tray) when Windows starts.
+    pub start_with_windows: bool,
 }
 
 impl Default for DetectorConfig {
@@ -51,6 +53,7 @@ impl Default for DetectorConfig {
             .collect(),
             shortcut: "Ctrl+Alt+M".to_string(),
             audio_retention_days: 30,
+            start_with_windows: true,
         }
     }
 }
@@ -453,12 +456,72 @@ async fn cleanup_audio<R: Runtime>(app: &AppHandle<R>) {
 pub struct AutoSettings {
     shortcut: String,
     audio_retention_days: u32,
+    #[serde(default = "yes")]
+    start_with_windows: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Shows the tray icon next to the clock instead of in the hidden overflow, unless the user
+/// already chose otherwise in Windows settings (IsPromoted present).
+fn promote_tray_icon() {
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
+        let Ok(exe) = std::env::current_exe() else { return };
+        let exe = exe.to_string_lossy().to_lowercase();
+        let Ok(root) = winreg::RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Control Panel\NotifyIconSettings") else {
+            return;
+        };
+        for name in root.enum_keys().flatten() {
+            let Ok(key) = root.open_subkey_with_flags(&name, KEY_READ | KEY_SET_VALUE) else { continue };
+            let path: String = key.get_value("ExecutablePath").unwrap_or_default();
+            if path.to_lowercase() != exe || key.get_value::<u32, _>("IsPromoted").is_ok() {
+                continue;
+            }
+            if key.set_value("IsPromoted", &1u32).is_ok() {
+                log::info!("meeting-detector: tray icon pinned next to the clock");
+            }
+        }
+    }
+}
+
+/// Adds or removes Meetily from HKCU\...\Run (started hidden with --autostart).
+fn apply_autostart(enabled: bool) {
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+        let Ok(run) = winreg::RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Run", KEY_SET_VALUE)
+        else {
+            return;
+        };
+        if enabled {
+            if let Ok(exe) = std::env::current_exe() {
+                let value = format!("\"{}\" --autostart", exe.display());
+                match run.set_value("Meetily", &value) {
+                    Ok(()) => log::info!("meeting-detector: start with Windows on"),
+                    Err(e) => log::warn!("meeting-detector: cannot set autostart: {}", e),
+                }
+            }
+        } else if run.delete_value("Meetily").is_ok() {
+            log::info!("meeting-detector: start with Windows off");
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = enabled;
 }
 
 #[tauri::command]
 pub async fn auto_settings_get<R: Runtime>(app: AppHandle<R>) -> AutoSettings {
     let config = load_config(&app);
-    AutoSettings { shortcut: config.shortcut, audio_retention_days: config.audio_retention_days }
+    AutoSettings {
+        shortcut: config.shortcut,
+        audio_retention_days: config.audio_retention_days,
+        start_with_windows: config.start_with_windows,
+    }
 }
 
 #[tauri::command]
@@ -473,6 +536,8 @@ pub async fn auto_settings_set<R: Runtime>(app: AppHandle<R>, settings: AutoSett
         config.shortcut = shortcut;
     }
     config.audio_retention_days = settings.audio_retention_days.min(3650);
+    config.start_with_windows = settings.start_with_windows;
+    apply_autostart(config.start_with_windows);
     let path = config_path(&app).ok_or("no app data dir")?;
     std::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap_or_default()).map_err(|e| e.to_string())?;
     log::info!("meeting-detector: settings saved (shortcut {:?}, audio kept {} days)", config.shortcut, config.audio_retention_days);
@@ -484,10 +549,15 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
     if !cfg!(windows) {
         return;
     }
-    register_shortcut(&app, &load_config(&app));
+    let config = load_config(&app);
+    register_shortcut(&app, &config);
+    apply_autostart(config.start_with_windows);
     let cleanup_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(120)).await;
+        // Windows registers the tray icon a few seconds after it is created.
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        promote_tray_icon();
+        tokio::time::sleep(Duration::from_secs(100)).await;
         loop {
             cleanup_audio(&cleanup_app).await;
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;

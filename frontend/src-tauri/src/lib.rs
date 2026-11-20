@@ -48,6 +48,7 @@ pub mod doodle;
 pub mod notifications;
 pub mod meeting_detector; // Fork: auto start/stop on meeting mic use
 pub mod notion_agent; // Fork: post-meeting Notion agent (via Claude Code)
+pub mod health; // Fork: health check (Claude, Notion, network, mic)
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;
@@ -726,6 +727,13 @@ pub fn run() {
             tauri::async_runtime::block_on(claude_code::init(_app.handle()));
             // Fork: post-meeting Notion agent worker (persistent queue + retries).
             notion_agent::start(_app.handle().clone());
+            health::start(_app.handle().clone());
+            // Fork: started by Windows at logon -> stay in the tray, no window.
+            if std::env::args().any(|a| a == "--autostart") {
+                if let Some(window) = _app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             // Fork: start/stop recording automatically when a meeting app uses the microphone.
             meeting_detector::start(_app.handle().clone());
 
@@ -761,6 +769,8 @@ pub fn run() {
             meeting_detector::meeting_pill_drag,
             meeting_detector::meeting_pill_compact,
             meeting_detector::auto_settings_get,
+            health::health_status,
+            health::health_run,
             meeting_detector::auto_settings_set,
             notion_agent::notion_agent_jobs,
             notion_agent::notion_agent_retry,
