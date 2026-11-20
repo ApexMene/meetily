@@ -95,6 +95,8 @@ struct Job {
     next_attempt: Option<DateTime<Utc>>,
     last_error: Option<String>,
     failure_notified: bool,
+    /// Second pass done (or attempted): the transcript in the DB is the final one.
+    retranscribed: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -346,6 +348,15 @@ async fn run_due_jobs<R: Runtime>(app: &AppHandle<R>, base: &Path, config: &Agen
         }
         log::info!("notion-agent: processing {} (attempt {})", job.meeting_id, job.attempts + 1);
         set_running(Some(&job.meeting_id));
+        if !job.retranscribed {
+            let finished = second_pass(app, config, &job.meeting_id).await;
+            if crate::audio::recording_commands::is_recording().await || !finished {
+                set_running(None);
+                return; // a new meeting started meanwhile: redo the pass and send the recap after it
+            }
+            job.retranscribed = true;
+            let _ = write_json(&path, &job);
+        }
         let result = process(app, base, config, &job.meeting_id).await;
         set_running(None);
         match result {
@@ -550,6 +561,36 @@ async fn run_claude(installation: &crate::claude_code::Installation, config: &Ag
         "",
         "--no-session-persistence",
     ];
+    run_claude_args(installation, config, &args, stdin).await
+}
+
+/// Claude Code without any tool (no MCP, no files): plain text in, plain text out.
+async fn run_claude_text(installation: &crate::claude_code::Installation, config: &AgentConfig, model: &str, system: &str, stdin: String) -> Result<String, String> {
+    let args: Vec<&str> = vec![
+        "--print",
+        "--output-format",
+        "json",
+        "--model",
+        model,
+        "--system-prompt",
+        system,
+        "--tools",
+        "",
+        "--disable-slash-commands",
+        "--setting-sources",
+        "",
+        "--no-session-persistence",
+    ];
+    let stdout = run_claude_args(installation, config, &args, stdin).await?;
+    let line = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default();
+    let print: PrintResult = serde_json::from_str(line.trim()).map_err(|_| truncate(line, 200))?;
+    if print.is_error {
+        return Err(truncate(&print.result.unwrap_or_default(), 200));
+    }
+    Ok(print.result.unwrap_or_default())
+}
+
+async fn run_claude_args(installation: &crate::claude_code::Installation, config: &AgentConfig, args: &[&str], stdin: String) -> Result<String, String> {
     let env = proxy_env(config);
     let mut command = match &installation.runtime {
         crate::claude_code::Runtime::Native => {
@@ -570,7 +611,7 @@ async fn run_claude(installation: &crate::claude_code::Installation, config: &Ag
             command
         }
     };
-    command.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    command.args(args.iter().copied()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(windows)]
     {
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -843,4 +884,188 @@ pub fn failing_jobs<R: Runtime>(app: &AppHandle<R>) -> usize {
 
 pub fn wake() {
     WAKE.notify_one();
+}
+
+
+/// Fork: second pass. The live transcript is cut into short chunks and Parakeet sometimes drifts
+/// into other languages on them. After the meeting:
+/// 1. the whole recording is re-transcribed (speech-detected segments) with the best local model
+///    (Parakeet "ultra" when installed, otherwise the configured one);
+/// 2. optionally Claude Haiku cleans it: drops the noise the model hallucinates on silence and
+///    fixes obvious mistakes, without inventing anything.
+/// The live transcript is saved to `transcripts.live.json` in the meeting folder first; on any
+/// failure the current transcript is kept. Returns false only when the pass was interrupted by a
+/// new recording and must be redone later.
+async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeting_id: &str) -> bool {
+    let mode = crate::meeting_detector::second_pass_mode(app);
+    if mode == "off" {
+        return true;
+    }
+    let Some(pool) = pool(app) else { return true };
+    let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+        .bind(meeting_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+    let Some(folder) = folder.filter(|f| !f.trim().is_empty()) else {
+        log::info!("notion-agent: second pass skipped for {} (no recording folder)", meeting_id);
+        return true;
+    };
+    backup_live_transcript(&pool, meeting_id, Path::new(&folder)).await;
+
+    let model = second_pass_model().await;
+    let started = std::time::Instant::now();
+    log::info!("notion-agent: second pass ({:?}, {}) for {}", model, mode, meeting_id);
+    match crate::audio::retranscription::start_retranscription(app.clone(), meeting_id.to_string(), folder, None, model, Some("parakeet".to_string())).await {
+        Ok(result) => log::info!(
+            "notion-agent: second pass done for {}: {} segments in {:.0}s",
+            meeting_id,
+            result.segments_count,
+            started.elapsed().as_secs_f64()
+        ),
+        Err(error) => {
+            if error.to_string().contains("cancelled") || crate::audio::recording_commands::is_recording().await {
+                log::info!("notion-agent: second pass for {} interrupted by a new recording, will retry", meeting_id);
+                return false;
+            }
+            log::warn!("notion-agent: second pass failed for {} (keeping live transcript): {}", meeting_id, error);
+            return true;
+        }
+    }
+    if mode == "full" {
+        let started = std::time::Instant::now();
+        match clean_transcript(&pool, config, meeting_id).await {
+            Ok((kept, dropped)) => log::info!(
+                "notion-agent: transcript cleaned for {}: {} segments kept, {} noise dropped in {:.0}s",
+                meeting_id,
+                kept,
+                dropped,
+                started.elapsed().as_secs_f64()
+            ),
+            Err(error) => log::warn!("notion-agent: transcript cleaning skipped for {}: {}", meeting_id, error),
+        }
+    }
+    true
+}
+
+/// Parakeet "ultra" (better Italian, same speed) when it is installed as a custom model.
+const ULTRA_MODEL: &str = "custom-parakeet-tdt-0-6b-v3-ultra-onnx-int8";
+
+async fn second_pass_model() -> Option<String> {
+    let models = crate::custom_models::engine_hooks::parakeet_models().await;
+    models
+        .iter()
+        .any(|m| m.name == ULTRA_MODEL && matches!(m.status, crate::parakeet_engine::parakeet_engine::ModelStatus::Available))
+        .then(|| ULTRA_MODEL.to_string())
+}
+
+async fn backup_live_transcript(pool: &sqlx::SqlitePool, meeting_id: &str, folder: &Path) {
+    let target = folder.join("transcripts.live.json");
+    if target.exists() {
+        return; // keep the first (real live) copy when the pass is retried
+    }
+    let rows = sqlx::query("SELECT transcript, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let segments: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "text": r.try_get::<String, _>("transcript").unwrap_or_default(),
+                "start": r.try_get::<Option<f64>, _>("audio_start_time").ok().flatten(),
+                "end": r.try_get::<Option<f64>, _>("audio_end_time").ok().flatten(),
+            })
+        })
+        .collect();
+    if let Err(error) = write_json(&target, &serde_json::json!({ "meeting_id": meeting_id, "segments": segments })) {
+        log::warn!("notion-agent: cannot save live transcript backup: {}", error);
+    }
+}
+
+const CLEAN_SYSTEM: &str = "You clean automatic speech transcripts. Answer only with the requested lines.";
+const CLEAN_PROMPT: &str = "Questa e' la trascrizione automatica di un meeting di lavoro in italiano, con termini tecnici \
+inglesi (deploy, backlog, pull request, feedback, meeting...). E' divisa in segmenti numerati.
+Il modello a volte sbaglia parole, cambia lingua per errore o inventa frasi su rumore e silenzio
+(es. frammenti in spagnolo, tedesco, cirillico, parole senza senso).
+Per OGNI segmento riscrivi la versione piu' probabile di cio' che e' stato detto:
+- correggi solo errori evidenti (parole storpiate, lingua sbagliata), mantieni i termini inglesi usati di proposito;
+- non inventare, non riassumere, non aggiungere contenuto;
+- se il segmento e' rumore o senza senso scrivi esattamente: [rumore]
+Output: una riga per segmento, nello stesso ordine, formato \"n. testo\". Nient'altro.";
+const CLEAN_CHUNK: usize = 60;
+
+/// Haiku pass over the re-transcribed segments. Returns (kept, dropped).
+async fn clean_transcript(pool: &sqlx::SqlitePool, config: &AgentConfig, meeting_id: &str) -> Result<(usize, usize), String> {
+    let rows = sqlx::query("SELECT id, transcript FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let segments: Vec<(String, String)> = rows
+        .iter()
+        .map(|r| (r.try_get::<String, _>("id").unwrap_or_default(), r.try_get::<String, _>("transcript").unwrap_or_default()))
+        .collect();
+    if segments.is_empty() {
+        return Ok((0, 0));
+    }
+    let installation = crate::claude_code::agent_installation().await?;
+    let mut updates: Vec<(String, Option<String>)> = Vec::new(); // None = drop
+    for chunk in segments.chunks(CLEAN_CHUNK) {
+        let mut stdin = format!("{}\n\nSEGMENTI\n", CLEAN_PROMPT);
+        for (n, (_, text)) in chunk.iter().enumerate() {
+            stdin.push_str(&format!("{}. {}\n", n + 1, text.replace('\n', " ")));
+        }
+        let answer = match run_claude_text(&installation, config, CLEAN_MODEL, CLEAN_SYSTEM, stdin).await {
+            Ok(answer) => answer,
+            Err(error) => {
+                log::warn!("notion-agent: cleaning chunk failed, keeping it as is: {}", error);
+                continue;
+            }
+        };
+        match parse_clean_answer(&answer, chunk.len()) {
+            Some(lines) => {
+                for ((id, original), line) in chunk.iter().zip(lines) {
+                    match line {
+                        None => updates.push((id.clone(), None)),
+                        Some(text) if text != *original => updates.push((id.clone(), Some(text))),
+                        Some(_) => {}
+                    }
+                }
+            }
+            None => log::warn!("notion-agent: cleaning answer malformed for a chunk, keeping it as is"),
+        }
+    }
+    let dropped = updates.iter().filter(|(_, t)| t.is_none()).count();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    for (id, text) in &updates {
+        let query = match text {
+            Some(text) => sqlx::query("UPDATE transcripts SET transcript = ? WHERE id = ?").bind(text).bind(id),
+            None => sqlx::query("DELETE FROM transcripts WHERE id = ?").bind(id),
+        };
+        query.execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok((segments.len() - dropped, dropped))
+}
+
+const CLEAN_MODEL: &str = "haiku";
+
+/// "n. testo" lines -> one entry per segment (None = noise). None when anything is missing.
+fn parse_clean_answer(answer: &str, expected: usize) -> Option<Vec<Option<String>>> {
+    let mut out: Vec<Option<Option<String>>> = vec![None; expected];
+    for line in answer.lines() {
+        let line = line.trim();
+        let Some((num, text)) = line.split_once(". ").or_else(|| line.split_once('.')) else { continue };
+        let Ok(n) = num.trim().parse::<usize>() else { continue };
+        if n == 0 || n > expected {
+            continue;
+        }
+        let text = text.trim();
+        out[n - 1] = Some(if text.is_empty() || text.eq_ignore_ascii_case("[rumore]") { None } else { Some(text.to_string()) });
+    }
+    out.into_iter().collect()
 }

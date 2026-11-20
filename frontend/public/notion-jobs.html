@@ -33,7 +33,7 @@
   .settings h2 { font-size:13px; margin:0 0 10px; }
   .field { display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
   .field label { width:230px; }
-  .field input { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .field select, .field input { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
   .field .hint { color:var(--muted); font-size:12px; }
   #sstatus { font-size:12px; margin-left:8px; }
   h2.section { font-size:13px; margin:18px 18px 0; }
@@ -57,6 +57,9 @@
     <input id="shortcut" placeholder="Ctrl+Alt+M" size="16"><span class="hint">premi i tasti qui dentro; vuoto = nessuna</span></div>
   <div class="field"><label for="days">Cancella l'audio dopo (giorni)</label>
     <input id="days" type="number" min="0" max="3650" style="width:80px"><span class="hint">trascrizione e resoconto restano; 0 = mai</span></div>
+  <div class="field"><label for="pass2">Ritrascrizione a fine meeting</label>
+    <select id="pass2"><option value="full">Completa: modello migliore + pulizia con Claude (~25 min per ora)</option><option value="model">Solo modello migliore (~22 min per ora)</option><option value="off">No, tieni la trascrizione live</option></select>
+    <span class="hint">e' il testo che va a Claude e in Notion</span></div>
   <div class="field"><label for="autostart">Avvia con Windows</label>
     <input id="autostart" type="checkbox"><span class="hint">parte nascosta, solo icona vicino all'orologio</span></div>
   <div class="field"><button class="primary" id="save">Salva</button><span id="sstatus"></span></div>
@@ -135,8 +138,8 @@
   }
   document.getElementById('refresh').onclick = load;
   var sc = document.getElementById('shortcut'), days = document.getElementById('days'), st = document.getElementById('sstatus');
-  var auto = document.getElementById('autostart');
-  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; });
+  var auto = document.getElementById('autostart'), pass2 = document.getElementById('pass2');
+  invoke('auto_settings_get').then(function (s) { sc.value = s.shortcut; days.value = s.audio_retention_days; auto.checked = !!s.start_with_windows; pass2.value = s.second_pass || 'full'; });
   function renderHealth(r) {
     var box = document.getElementById('health');
     if (!r.checks || !r.checks.length) return;
@@ -170,7 +173,7 @@
   });
   document.getElementById('save').onclick = function () {
     st.style.color = ''; st.textContent = 'Salvo...';
-    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked } })
+    invoke('auto_settings_set', { settings: { shortcut: sc.value.trim(), audio_retention_days: Math.max(0, parseInt(days.value || '0', 10)), start_with_windows: auto.checked, second_pass: pass2.value } })
       .then(function () { st.style.color = 'var(--ok)'; st.textContent = 'Salvato'; },
             function (e) { st.style.color = 'var(--err)'; st.textContent = String(e); });
   };

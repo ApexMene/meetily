@@ -35,6 +35,8 @@ pub struct DetectorConfig {
     pub audio_retention_days: u32,
     /// Start Meetily (in the tray) when Windows starts.
     pub start_with_windows: bool,
+    /// Re-transcription of the whole recording after the meeting: "parakeet", "whisper" (Italian), "off".
+    pub second_pass: String,
 }
 
 impl Default for DetectorConfig {
@@ -54,6 +56,7 @@ impl Default for DetectorConfig {
             shortcut: "Ctrl+Alt+M".to_string(),
             audio_retention_days: 30,
             start_with_windows: true,
+            second_pass: "full".to_string(),
         }
     }
 }
@@ -458,6 +461,19 @@ pub struct AutoSettings {
     audio_retention_days: u32,
     #[serde(default = "yes")]
     start_with_windows: bool,
+    #[serde(default)]
+    second_pass: String,
+}
+
+/// Post-meeting re-transcription (see notion_agent::second_pass):
+/// "full" = best local model + Claude Haiku cleanup, "model" = local model only, "off".
+/// Older values ("parakeet", "whisper") map to "full".
+pub fn second_pass_mode<R: Runtime>(app: &AppHandle<R>) -> String {
+    match load_config(app).second_pass.as_str() {
+        "off" => "off".into(),
+        "model" => "model".into(),
+        _ => "full".into(),
+    }
 }
 
 fn yes() -> bool {
@@ -521,6 +537,7 @@ pub async fn auto_settings_get<R: Runtime>(app: AppHandle<R>) -> AutoSettings {
         shortcut: config.shortcut,
         audio_retention_days: config.audio_retention_days,
         start_with_windows: config.start_with_windows,
+        second_pass: second_pass_mode(&app),
     }
 }
 
@@ -537,6 +554,9 @@ pub async fn auto_settings_set<R: Runtime>(app: AppHandle<R>, settings: AutoSett
     }
     config.audio_retention_days = settings.audio_retention_days.min(3650);
     config.start_with_windows = settings.start_with_windows;
+    if ["full", "model", "off"].contains(&settings.second_pass.as_str()) {
+        config.second_pass = settings.second_pass.clone();
+    }
     apply_autostart(config.start_with_windows);
     let path = config_path(&app).ok_or("no app data dir")?;
     std::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap_or_default()).map_err(|e| e.to_string())?;
