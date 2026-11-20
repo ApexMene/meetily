@@ -882,13 +882,25 @@ pub const JOBS_LABEL: &str = "notion-jobs";
 
 /// Shows the "Resoconti Notion" window (tray menu, meeting bar).
 pub fn open_jobs_window<R: Runtime>(app: &AppHandle<R>) {
+    open_jobs_window_at(app, None);
+}
+
+/// Same, scrolled to a section of the page (`adv` = advanced settings, opened).
+pub fn open_jobs_window_at<R: Runtime>(app: &AppHandle<R>, section: Option<&str>) {
+    let section = section.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric()));
     if let Some(window) = app.get_webview_window(JOBS_LABEL) {
+        if let Some(section) = section {
+            let _ = window.eval(&format!("location.hash = '{}'; window.dispatchEvent(new HashChangeEvent('hashchange'));", section));
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
         return;
     }
-    let built = tauri::WebviewWindowBuilder::new(app, JOBS_LABEL, tauri::WebviewUrl::App("notion-jobs.html".into()))
+    let built = tauri::WebviewWindowBuilder::new(app, JOBS_LABEL, tauri::WebviewUrl::App(match section {
+            Some(section) => format!("notion-jobs.html#{}", section).into(),
+            None => "notion-jobs.html".into(),
+        }))
         .title("Meetily · Resoconti e impostazioni")
         .inner_size(760.0, 640.0)
         .min_inner_size(520.0, 320.0)
@@ -900,8 +912,8 @@ pub fn open_jobs_window<R: Runtime>(app: &AppHandle<R>) {
 }
 
 #[tauri::command]
-pub async fn notion_agent_open_jobs<R: Runtime>(app: AppHandle<R>) {
-    open_jobs_window(&app);
+pub async fn notion_agent_open_jobs<R: Runtime>(app: AppHandle<R>, section: Option<String>) {
+    open_jobs_window_at(&app, section.as_deref());
 }
 
 
