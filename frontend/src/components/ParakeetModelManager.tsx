@@ -12,6 +12,9 @@ import {
   getModelDisplayInfo,
   getModelDisplayName
 } from '../lib/parakeet';
+// Fork: user-added models
+import { CustomModelsSection } from './CustomModels/CustomModelsSection';
+import { isCustomModelId } from '../lib/custom-models';
 
 interface ParakeetModelManagerProps {
   selectedModel?: string;
@@ -400,7 +403,7 @@ export function ParakeetModelManager({
     m.name === 'parakeet-tdt-0.6b-v3-int8'
   );
   const otherModels = models.filter(m =>
-    m.name !== 'parakeet-tdt-0.6b-v3-int8'
+    m.name !== 'parakeet-tdt-0.6b-v3-int8' && !isCustomModelId(m.name)
   );
 
   return (
@@ -447,6 +450,15 @@ export function ParakeetModelManager({
           ))}
         </div>
       )}
+
+      {/* Fork: user-added models */}
+      <CustomModelsSection
+        engine="parakeet"
+        selectedModel={selectedModel}
+        defaultModelId="parakeet-tdt-0.6b-v3-int8"
+        onSelect={selectModel}
+        onChanged={async () => setModels(await ParakeetAPI.getAvailableModels())}
+      />
 
       {/* Helper text */}
       {selectedModel && (

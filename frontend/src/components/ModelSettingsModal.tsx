@@ -512,8 +512,9 @@ export function ModelSettingsModal({
     }
   };
 
-  const loadBuiltinAiModels = async () => {
-    if (builtinAiModels.length > 0) return; // Already loaded
+  // Fork: `force` reloads after custom models are added or removed.
+  const loadBuiltinAiModels = async (force = false) => {
+    if (!force && builtinAiModels.length > 0) return; // Already loaded
 
     try {
       const data = (await invoke('builtin_ai_list_models')) as any[];
@@ -1376,6 +1377,8 @@ export function ModelSettingsModal({
               onModelSelect={(model) =>
                 setModelConfig((prev: ModelConfig) => ({ ...prev, model }))
               }
+              // Fork: keep the provider's model list in sync after adding/removing custom models.
+              onModelsChanged={() => loadBuiltinAiModels(true)}
             />
           </div>
         )}

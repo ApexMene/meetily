@@ -353,6 +353,10 @@ impl ModelManager {
         model_name: &str,
         progress_callback: Option<Box<dyn Fn(DownloadProgress) + Send>>,
     ) -> Result<()> {
+        // Fork: custom models are installed and removed by the custom models commands.
+        if let Some(error) = crate::custom_models::summary_hooks::managed_elsewhere(model_name) {
+            return Err(error);
+        }
         log::info!("Starting download for model: {}", model_name);
 
         // Check if already downloading
@@ -821,6 +825,10 @@ impl ModelManager {
 
     /// Delete a corrupted or available model file
     pub async fn delete_model(&self, model_name: &str) -> Result<()> {
+        // Fork: custom models are installed and removed by the custom models commands.
+        if let Some(error) = crate::custom_models::summary_hooks::managed_elsewhere(model_name) {
+            return Err(error);
+        }
         log::info!("Deleting model: {}", model_name);
 
         let model_def = get_model_by_name(model_name)

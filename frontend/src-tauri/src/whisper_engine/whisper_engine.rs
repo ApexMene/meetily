@@ -256,6 +256,9 @@ impl WhisperEngine {
             models.push(model_info);
         }
         
+        // Fork: append user-added models from the custom model registry.
+        models.extend(crate::custom_models::engine_hooks::whisper_models().await);
+
         let active_downloads = self.active_downloads.lock().await;
         #[cfg(test)]
         if let Some(hook) = self.test_hook() {
@@ -747,6 +750,9 @@ impl WhisperEngine {
     }
 
     pub async fn delete_model(&self, model_name: &str) -> Result<String> {
+        if let Some(error) = crate::custom_models::engine_hooks::managed_elsewhere(model_name) {
+            return Err(error);
+        }
         log::info!("Attempting to delete model: {}", model_name);
 
         // Get model info to find the file path

@@ -41,6 +41,7 @@ pub mod api;
 pub mod audio;
 pub mod config;
 pub mod console_utils;
+pub mod custom_models; // Fork: user-added transcription models
 pub mod database;
 pub mod doodle;
 pub mod notifications;
@@ -705,6 +706,9 @@ pub fn run() {
             })
             .expect("Failed to initialize database");
 
+            // Fork: load the custom transcription model registry (engines wait for it).
+            tauri::async_runtime::block_on(custom_models::init(_app.handle()));
+
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
             if let Ok(resource_path) = _app.handle().path().resource_dir() {
@@ -789,6 +793,18 @@ pub fn run() {
             parakeet_engine::commands::parakeet_cancel_download,
             parakeet_engine::commands::parakeet_delete_corrupted_model,
             parakeet_engine::commands::open_parakeet_models_folder,
+            // Fork: custom transcription models
+            custom_models::commands::custom_models_list,
+            custom_models::commands::custom_models_hf_inspect,
+            custom_models::commands::custom_models_hf_install,
+            custom_models::commands::custom_models_cancel,
+            custom_models::commands::custom_models_pick_local,
+            custom_models::commands::custom_models_import_local,
+            custom_models::commands::custom_models_delete,
+            custom_models::commands::custom_models_token_status,
+            custom_models::commands::custom_models_set_token,
+            custom_models::commands::custom_models_clear_token,
+            custom_models::commands::custom_models_open_folder,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,

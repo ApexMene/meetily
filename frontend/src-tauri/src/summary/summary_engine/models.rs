@@ -162,7 +162,7 @@ pub struct ModelDef {
 /// Get all available built-in AI models
 /// Add new models here - the system will automatically detect and manage them
 pub fn get_available_models() -> Vec<ModelDef> {
-    vec![
+    let mut models = vec![
         // Qwen 3.5 2B - Balanced tier
         ModelDef {
             name: "qwen3.5:2b".to_string(),
@@ -215,7 +215,10 @@ pub fn get_available_models() -> Vec<ModelDef> {
             sampling: SamplingParams::gemma3_instruct(vec!["<end_of_turn>".to_string()]),
             description: "Fastest model. Runs on any hardware with ~1GB RAM. Good for quick summaries.".to_string(),
         },
-    ]
+    ];
+    // Fork: custom GGUF models registered in the custom models section.
+    models.extend(crate::custom_models::summary_hooks::model_defs());
+    models
 }
 
 /// Get a specific model by name
@@ -302,7 +305,11 @@ pub fn format_prompt(
     let template = match template_name {
         "gemma3" => GEMMA3_TEMPLATE,
         "qwen3.5_nonthinking" => QWEN35_NONTHINKING_TEMPLATE,
-        _ => return Err(anyhow!("Unknown template: {}", template_name)),
+        // Fork: chat formats of custom models (ChatML, Llama 3, Mistral).
+        _ => {
+            return crate::custom_models::summary_hooks::format_prompt(template_name, system_prompt, user_prompt)
+                .ok_or_else(|| anyhow!("Unknown template: {}", template_name))
+        }
     };
 
     let escaped_user_prompt = escape_user_prompt_control_markers(user_prompt);

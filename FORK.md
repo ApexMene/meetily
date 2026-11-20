@@ -16,6 +16,28 @@ non vanno in conflitto:
 
 `tauri.conf.json` resta identico a upstream. **Non** modificare lì pubkey, endpoint o versione.
 
+### Funzionalità del fork
+
+- **Modelli custom** per trascrizione e riassunti (Hugging Face / file locali): design, file toccati e test in
+  [docs/fork/custom-models.md](docs/fork/custom-models.md).
+  Codice nuovo isolato in `frontend/src-tauri/src/custom_models/` e
+  `frontend/src/components/CustomModels/`; nei file upstream solo agganci piccoli
+  (marcati con il commento `Fork:`), per ridurre i conflitti nei merge.
+
+Durante un merge da upstream, cercare `Fork:` per ritrovare tutti gli agganci.
+
+## Build locale su Windows
+
+Prerequisiti: Visual Studio 2022 (C++ e CMake), Rust 1.99.1 (`rustup`), Node 20+, pnpm 9.15.9
+(`corepack pnpm@9.15.9`). `whisper-rs` genera i binding con bindgen: serve **libclang 18**
+(con LLVM 23 i binding Windows escono incompleti). Senza diritti admin basta la DLL del pacchetto
+PyPI `libclang==18.1.1` e `LIBCLANG_PATH` che punta alla sua cartella `clang/native`.
+
+```bash
+cargo build -p llama-helper && cp target/debug/llama-helper.exe frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe
+cd frontend && corepack pnpm@9.15.9 install --frozen-lockfile && corepack pnpm@9.15.9 run tauri:dev
+```
+
 ## Branch
 
 - `main` — copia esatta di upstream. Si aggiorna solo con **Sync fork** su GitHub. Nessun commit diretto.

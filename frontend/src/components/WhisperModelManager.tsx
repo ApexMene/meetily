@@ -14,6 +14,9 @@ import {
   WhisperAPI
 } from '../lib/whisper';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+// Fork: user-added models
+import { CustomModelsSection } from './CustomModels/CustomModelsSection';
+import { isCustomModelId } from '../lib/custom-models';
 
 interface ModelManagerProps {
   selectedModel?: string;
@@ -482,7 +485,7 @@ export function ModelManager({
   const basicModelNames = ["small", "medium-q5_0", "large-v3-q5_0", "large-v3-turbo", "large-v3"];
   const basicModels = models.filter(m => basicModelNames.includes(m.name))
     .sort((a, b) => basicModelNames.indexOf(a.name) - basicModelNames.indexOf(b.name));
-  const advancedModels = models.filter(m => !basicModelNames.includes(m.name));
+  const advancedModels = models.filter(m => !basicModelNames.includes(m.name) && !isCustomModelId(m.name));
 
   return (
     <div className={`space-y-3 ${className}`}>
@@ -545,6 +548,15 @@ export function ModelManager({
           </AccordionItem>
         </Accordion>
       )}
+
+      {/* Fork: user-added models */}
+      <CustomModelsSection
+        engine="whisper"
+        selectedModel={selectedModel}
+        defaultModelId="large-v3-turbo"
+        onSelect={selectModel}
+        onChanged={async () => setModels(await WhisperAPI.getAvailableModels())}
+      />
 
       {/* Helper text */}
       {selectedModel && (

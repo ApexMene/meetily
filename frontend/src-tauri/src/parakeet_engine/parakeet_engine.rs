@@ -330,7 +330,15 @@ impl ParakeetEngine {
 
     /// Discover available Parakeet models.
     pub async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
-        self.discover_models_from_specs(PARAKEET_MODEL_SPECS).await
+        let mut models = self.discover_models_from_specs(PARAKEET_MODEL_SPECS).await?;
+        // Fork: append user-added models from the custom model registry.
+        let custom = crate::custom_models::engine_hooks::parakeet_models().await;
+        let mut available_models = self.available_models.write().await;
+        for model in custom {
+            available_models.insert(model.name.clone(), model.clone());
+            models.push(model);
+        }
+        Ok(models)
     }
 
     async fn discover_models_from_specs(&self, specs: &[ModelSpec]) -> Result<Vec<ModelInfo>> {
@@ -562,6 +570,9 @@ impl ParakeetEngine {
 
     /// Delete a corrupted model
     pub async fn delete_model(&self, model_name: &str) -> Result<String> {
+        if let Some(error) = crate::custom_models::engine_hooks::managed_elsewhere(model_name) {
+            return Err(error);
+        }
         log::info!("Attempting to delete Parakeet model: {}", model_name);
 
         // Get model info to find the directory path

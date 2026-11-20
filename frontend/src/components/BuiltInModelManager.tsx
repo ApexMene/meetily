@@ -9,6 +9,9 @@ import { cn } from '@/lib/utils';
 import { Download, RefreshCw, BadgeAlert, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatSummaryModelSizeLabelFromMb } from '@/lib/onboarding-summary-model';
+// Fork: custom GGUF summary models.
+import { CustomModelsSection } from '@/components/CustomModels/CustomModelsSection';
+import { isCustomModelId } from '@/lib/custom-models';
 
 interface ModelInfo {
   name: string;
@@ -33,12 +36,15 @@ interface BuiltInModelManagerProps {
   selectedModel: string;
   onModelSelect: (model: string) => void;
   layout?: 'inline' | 'dialog';
+  /** Fork: called after a custom model is added or removed. */
+  onModelsChanged?: () => void | Promise<void>;
 }
 
 export function BuiltInModelManager({
   selectedModel,
   onModelSelect,
   layout = 'inline',
+  onModelsChanged,
 }: BuiltInModelManagerProps) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -46,12 +52,15 @@ export function BuiltInModelManager({
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [downloadProgressInfo, setDownloadProgressInfo] = useState<Record<string, DownloadProgressInfo>>({});
   const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
+  // Fork: built-in model the backend falls back to when the selected custom model is removed.
+  const [recommendedModel, setRecommendedModel] = useState<string>('');
 
   const fetchModels = async () => {
     try {
       setIsLoading(true);
       const data = (await invoke('builtin_ai_list_models')) as ModelInfo[];
-      setModels(data);
+      // Fork: custom models are listed (and removed) by CustomModelsSection.
+      setModels(data.filter((m) => !isCustomModelId(m.name)));
 
       // Auto-select first available model if none selected
       if (data.length > 0 && !selectedModel) {
@@ -71,6 +80,9 @@ export function BuiltInModelManager({
 
   useEffect(() => {
     fetchModels();
+    invoke<string>('builtin_ai_get_recommended_model')
+      .then(setRecommendedModel)
+      .catch((error) => console.error('Failed to get the recommended model:', error));
   }, []);
 
   // Listen for download progress events
@@ -487,6 +499,18 @@ export function BuiltInModelManager({
           );
         })}
       </div>
+
+      {/* Fork: custom GGUF summary models */}
+      <CustomModelsSection
+        engine="summary"
+        selectedModel={selectedModel}
+        defaultModelId={recommendedModel}
+        onSelect={onModelSelect}
+        onChanged={async () => {
+          await fetchModels();
+          await onModelsChanged?.();
+        }}
+      />
     </div>
   );
 }
