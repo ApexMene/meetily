@@ -78,9 +78,10 @@
                 },
                 {
                     "identifier": "meeting-pill",
-                    "description": "Fork: meeting bar (only its own commands)",
+                    "description": "Fork: meeting bar and Notion jobs window (only their own commands)",
                     "windows": [
-                        "meeting-pill"
+                        "meeting-pill",
+                        "notion-jobs"
                     ],
                     "permissions": [
                         "core:default"
