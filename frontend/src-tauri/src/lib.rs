@@ -753,6 +753,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            // Fork: meeting bar buttons (meeting_detector)
+            meeting_detector::meeting_pill_open,
+            meeting_detector::meeting_pill_stop,
+            meeting_detector::meeting_pill_close,
             start_recording,
             stop_recording,
             is_recording,

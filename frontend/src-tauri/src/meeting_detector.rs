@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_notification::NotificationExt;
 
 const POLL: Duration = Duration::from_secs(3);
 
@@ -35,7 +34,7 @@ impl Default for DetectorConfig {
         Self {
             enabled: true,
             start_debounce_secs: 20,
-            stop_grace_secs: 90,
+            stop_grace_secs: 20,
             apps: [
                 "msteams", "teams.exe", "zoom", "webex", "ciscocollabhost", "slack", "discord",
                 "skype", "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera",
@@ -120,11 +119,89 @@ fn meeting_app(apps_in_use: &[String], config: &DetectorConfig, own_exe: &str) -
         .map(|key| display_name(key))
 }
 
-fn notify<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str) {
-    if let Err(error) = app.notification().builder().title(title).body(body).show() {
-        log::warn!("meeting-detector: notification failed: {}", error);
+const PILL_LABEL: &str = "meeting-pill";
+const PILL_WIDTH: f64 = 520.0;
+const PILL_HEIGHT: f64 = 76.0;
+/// How long each bar stays on screen before hiding itself (it never blocks the meeting app).
+const PILL_RECORDING_SECS: u64 = 25;
+const PILL_STOPPED_SECS: u64 = 12;
+
+/// Shows the Notion-style bar at the top centre of the primary screen.
+/// `mode` is "recording" or "stopped".
+pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
+    close_pill(app);
+    let safe_name: String = app_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    let since = chrono::Utc::now().timestamp_millis();
+    let url = format!("pill.html?mode={}&app={}&since={}", mode, safe_name, since);
+    let (x, y) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let scale = monitor.scale_factor();
+            let width = monitor.size().width as f64 / scale;
+            let left = monitor.position().x as f64 / scale;
+            let top = monitor.position().y as f64 / scale;
+            (left + (width - PILL_WIDTH) / 2.0, top + 8.0)
+        })
+        .unwrap_or((400.0, 8.0));
+    let built = tauri::WebviewWindowBuilder::new(app, PILL_LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("Meetily")
+        .inner_size(PILL_WIDTH, PILL_HEIGHT)
+        .position(x, y)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focused(false)
+        .build();
+    match built {
+        Ok(_) => {
+            let app = app.clone();
+            let secs = if mode == "stopped" { PILL_STOPPED_SECS } else { PILL_RECORDING_SECS };
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                close_pill(&app);
+            });
+        }
+        Err(error) => log::warn!("meeting-detector: cannot show bar: {}", error),
     }
 }
+
+pub fn close_pill<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(PILL_LABEL) {
+        let _ = window.close();
+    }
+}
+
+/// Bar button: open the app on the live transcript.
+#[tauri::command]
+pub async fn meeting_pill_open<R: Runtime>(app: AppHandle<R>) {
+    close_pill(&app);
+    crate::tray::focus_main_window(&app);
+    if crate::audio::recording_commands::is_recording().await {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.eval("if (window.location.pathname !== '/') window.location.assign('/')");
+        }
+    }
+}
+
+/// Bar button: stop the recording now.
+#[tauri::command]
+pub async fn meeting_pill_stop<R: Runtime>(app: AppHandle<R>) {
+    close_pill(&app);
+    if crate::audio::recording_commands::is_recording().await {
+        crate::tray::stop_recording_from_app(&app);
+    }
+}
+
+#[tauri::command]
+pub async fn meeting_pill_close<R: Runtime>(app: AppHandle<R>) {
+    close_pill(&app);
+}
+
 
 #[derive(Debug, PartialEq)]
 enum Phase {
@@ -175,11 +252,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                             if now.duration_since(since) >= Duration::from_secs(config.start_debounce_secs) {
                                 log::info!("meeting-detector: {} holds the mic, starting recording", name);
                                 crate::tray::start_recording_from_app(&app);
-                                notify(
-                                    &app,
-                                    "Trascrizione automatica avviata",
-                                    &format!("Meeting rilevato ({}). Clicca per vedere la trascrizione in tempo reale.", name),
-                                );
+                                show_pill(&app, "recording", name);
                                 phase = Phase::AutoRecording;
                                 start_requested = Some(now);
                                 gone_since = None;
@@ -207,11 +280,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                             if now.duration_since(since) >= Duration::from_secs(config.stop_grace_secs) {
                                 log::info!("meeting-detector: mic released, stopping recording");
                                 crate::tray::stop_recording_from_app(&app);
-                                notify(
-                                    &app,
-                                    "Meeting terminato",
-                                    "Trascrizione salvata. Il resoconto andra' in Notion appena pronto.",
-                                );
+                                show_pill(&app, "stopped", "");
                                 phase = Phase::HandsOff;
                             }
                         }

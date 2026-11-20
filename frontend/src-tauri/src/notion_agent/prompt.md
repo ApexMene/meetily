@@ -21,7 +21,8 @@ Lavori da solo: non fare domande, non chiedere conferme.
 3. **Card del meeting.** Cerca in Tasks una pagina Type=MEETING con `Notion Calendar` start entro
    ±45 minuti da `start_utc` del META (confronta in UTC).
    - Trovata (e `test_mode` = false): compila quella pagina, metti Status=Done, Type=MEETING SUMMARY.
-   - Non trovata (o `test_mode` = true): crea una nuova pagina in Tasks.
+   - Non trovata (o `test_mode` = true): l'evento non esiste in Notion, quindi CREALO tu in Tasks
+     con Type=MEETING e Areas=Work (oltre alle altre proprieta' sotto), e scrivi li' il resoconto.
 4. **Scrivi il resoconto** (formato sotto).
 5. **Crea le task** (regole sotto), poi aggiungi le menzioni alle task nella sezione "Task create".
 6. **Rispondi** con l'output finale (formato in fondo).
@@ -29,8 +30,8 @@ Lavori da solo: non fare domande, non chiedere conferme.
 ## Pagina resoconto
 Proprieta':
 - Name: `[MEETING] <titolo breve e concreto, max 8 parole>` (in test_mode: `[TEST][MEETING] ...`)
-- Type: MEETING SUMMARY; Status: Done; Sync_Source: n8n
-- Areas: Work (se il meeting e' di lavoro)
+- Type: MEETING SUMMARY se hai compilato la card esistente; MEETING se l'hai creata tu. Status: Done; Sync_Source: n8n
+- Areas: Work (sempre)
 - Project: i progetti principali discussi (solo se chiari, max 3)
 - Notion Calendar: start_utc -> end_utc del META (is_datetime=1)
 - Other: `{"meetily_id":"<meetily_id>","source":"meetily"}`
