@@ -757,6 +757,8 @@ pub fn run() {
             meeting_detector::meeting_pill_open,
             meeting_detector::meeting_pill_stop,
             meeting_detector::meeting_pill_close,
+            meeting_detector::meeting_pill_drag,
+            meeting_detector::meeting_pill_compact,
             start_recording,
             stop_recording,
             is_recording,

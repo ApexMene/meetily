@@ -126,28 +126,82 @@ const PILL_HEIGHT: f64 = 76.0;
 /// itself after a few seconds.
 const PILL_STOPPED_SECS: u64 = 12;
 
-/// Shows the Notion-style bar at the top centre of the primary screen.
-/// `mode` is "recording" or "stopped".
+const PILL_COMPACT_WIDTH: f64 = 168.0;
+const PILL_COMPACT_HEIGHT: f64 = 52.0;
+
+/// Where the user left the bar and whether they shrank it (`<app data>/meeting-pill.json`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct PillPrefs {
+    x: Option<f64>,
+    y: Option<f64>,
+    compact: bool,
+}
+
+fn pill_prefs_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|dir| dir.join("meeting-pill.json"))
+}
+
+fn load_pill_prefs<R: Runtime>(app: &AppHandle<R>) -> PillPrefs {
+    pill_prefs_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_pill_prefs<R: Runtime>(app: &AppHandle<R>, prefs: &PillPrefs) {
+    if let Some(path) = pill_prefs_path(app) {
+        let _ = std::fs::write(path, serde_json::to_vec_pretty(prefs).unwrap_or_default());
+    }
+}
+
+fn pill_size(compact: bool) -> (f64, f64) {
+    if compact { (PILL_COMPACT_WIDTH, PILL_COMPACT_HEIGHT) } else { (PILL_WIDTH, PILL_HEIGHT) }
+}
+
+/// True when the logical point lies on one of the connected monitors.
+fn on_some_monitor<R: Runtime>(app: &AppHandle<R>, x: f64, y: f64) -> bool {
+    app.available_monitors().unwrap_or_default().iter().any(|m| {
+        let scale = m.scale_factor();
+        let left = m.position().x as f64 / scale;
+        let top = m.position().y as f64 / scale;
+        let width = m.size().width as f64 / scale;
+        let height = m.size().height as f64 / scale;
+        x >= left - 20.0 && x < left + width - 40.0 && y >= top - 20.0 && y < top + height - 30.0
+    })
+}
+
+/// Shows the Notion-style bar: where the user last left it, otherwise at the top centre of
+/// the primary screen. `mode` is "recording" or "stopped".
 pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
     close_pill(app);
+    let prefs = load_pill_prefs(app);
     let safe_name: String = app_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
     let since = chrono::Utc::now().timestamp_millis();
-    let url = format!("pill.html?mode={}&app={}&since={}", mode, safe_name, since);
-    let (x, y) = app
+    let url = format!(
+        "pill.html?mode={}&app={}&since={}&compact={}",
+        mode, safe_name, since, if prefs.compact { 1 } else { 0 }
+    );
+    let (width, height) = pill_size(prefs.compact);
+    let default_pos = app
         .primary_monitor()
         .ok()
         .flatten()
         .map(|monitor| {
             let scale = monitor.scale_factor();
-            let width = monitor.size().width as f64 / scale;
+            let w = monitor.size().width as f64 / scale;
             let left = monitor.position().x as f64 / scale;
             let top = monitor.position().y as f64 / scale;
-            (left + (width - PILL_WIDTH) / 2.0, top + 100.0) // below the meeting app title bar and other apps' bars
+            (left + (w - PILL_WIDTH) / 2.0, top + 100.0) // below the meeting app title bar and other apps' bars
         })
         .unwrap_or((400.0, 100.0));
+    let (x, y) = match (prefs.x, prefs.y) {
+        (Some(x), Some(y)) if on_some_monitor(app, x, y) => (x, y),
+        _ => default_pos,
+    };
     let built = tauri::WebviewWindowBuilder::new(app, PILL_LABEL, tauri::WebviewUrl::App(url.into()))
         .title("Meetily")
-        .inner_size(PILL_WIDTH, PILL_HEIGHT)
+        .inner_size(width, height)
         .position(x, y)
         .decorations(false)
         .transparent(true)
@@ -158,15 +212,47 @@ pub fn show_pill<R: Runtime>(app: &AppHandle<R>, mode: &str, app_name: &str) {
         .focused(false)
         .build();
     match built {
-        Ok(_) if mode == "stopped" => {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(PILL_STOPPED_SECS)).await;
-                close_pill(&app);
+        Ok(window) => {
+            // Remember where the user drags the bar.
+            let handle = app.clone();
+            let scale = window.scale_factor().unwrap_or(1.0);
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Moved(pos) = event {
+                    let mut prefs = load_pill_prefs(&handle);
+                    prefs.x = Some(pos.x as f64 / scale);
+                    prefs.y = Some(pos.y as f64 / scale);
+                    save_pill_prefs(&handle, &prefs);
+                }
             });
+            if mode == "stopped" {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(PILL_STOPPED_SECS)).await;
+                    close_pill(&app);
+                });
+            }
         }
-        Ok(_) => {}
         Err(error) => log::warn!("meeting-detector: cannot show bar: {}", error),
+    }
+}
+
+/// Bar: move it around (mouse held on the bar).
+#[tauri::command]
+pub async fn meeting_pill_drag<R: Runtime>(app: AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(PILL_LABEL) {
+        let _ = window.start_dragging();
+    }
+}
+
+/// Bar: shrink to the small dot + timer, or grow back. Remembered for the next meetings.
+#[tauri::command]
+pub async fn meeting_pill_compact<R: Runtime>(app: AppHandle<R>, compact: bool) {
+    let mut prefs = load_pill_prefs(&app);
+    prefs.compact = compact;
+    save_pill_prefs(&app, &prefs);
+    if let Some(window) = app.get_webview_window(PILL_LABEL) {
+        let (width, height) = pill_size(compact);
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
     }
 }
 
