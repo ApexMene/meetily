@@ -55,9 +55,34 @@ fn root<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("models").join("second-opinion"))
 }
 
+/// Setting values for a Parakeet model (same list as the main model) start with this prefix.
+pub const PARAKEET_PREFIX: &str = "parakeet:";
+
+/// A valid stored setting: empty, a CTC folder name or `parakeet:<model name>`.
+pub fn is_valid_setting(value: &str) -> bool {
+    match value.strip_prefix(PARAKEET_PREFIX) {
+        Some(name) => !name.trim().is_empty() && name.len() <= 200 && !name.contains(['/', '\\']),
+        None => value.is_empty() || is_safe_name(value),
+    }
+}
+
+/// The second-opinion model chosen in the settings, if usable.
+pub fn alt_model<R: Runtime>(app: &AppHandle<R>, setting: &str, main_model: Option<&str>) -> Option<crate::audio::retranscription::AltModel> {
+    use crate::audio::retranscription::AltModel;
+    match setting.strip_prefix(PARAKEET_PREFIX) {
+        Some(name) if Some(name) == main_model => {
+            log::info!("second opinion = main model ({}): skipped", name);
+            None
+        }
+        Some(name) if !name.trim().is_empty() => Some(AltModel::Parakeet(name.to_string())),
+        Some(_) => None,
+        None => model_dir(app, setting).map(AltModel::Ctc),
+    }
+}
+
 /// Folder of an installed, usable second-opinion model.
 pub fn model_dir<R: Runtime>(app: &AppHandle<R>, name: &str) -> Option<PathBuf> {
-    if !is_safe_name(name) {
+    if name.is_empty() || !is_safe_name(name) {
         return None;
     }
     let dir = root(app)?.join(name);

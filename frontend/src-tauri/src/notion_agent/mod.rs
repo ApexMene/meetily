@@ -682,7 +682,11 @@ pub struct AgentModels {
     pub clean_model: String,
 }
 
-const ALLOWED_MODELS: &[&str] = &["haiku", "sonnet", "opus"];
+/// Claude CLI aliases (haiku / sonnet / opus) or a full model id such as `claude-opus-5-5`.
+fn is_valid_model(model: &str) -> bool {
+    let m = model.trim();
+    !m.is_empty() && m.len() <= 80 && !m.starts_with('-') && m.chars().all(|c| c.is_ascii_alphanumeric() || "-._[]".contains(c))
+}
 
 #[tauri::command]
 pub async fn agent_models_get<R: Runtime>(app: AppHandle<R>) -> Result<AgentModels, String> {
@@ -697,10 +701,10 @@ pub async fn agent_models_set<R: Runtime>(app: AppHandle<R>, models: AgentModels
     let path = base.join("config.json");
     // Raw file, so values coming from .env are not copied into it.
     let mut config: AgentConfig = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    if ALLOWED_MODELS.contains(&models.recap_model.as_str()) {
+    if is_valid_model(&models.recap_model) {
         config.model = models.recap_model;
     }
-    if ALLOWED_MODELS.contains(&models.clean_model.as_str()) {
+    if is_valid_model(&models.clean_model) {
         config.clean_model = models.clean_model;
     }
     write_json(&path, &config).map_err(|e| e.to_string())
@@ -709,6 +713,15 @@ pub async fn agent_models_set<R: Runtime>(app: AppHandle<R>, models: AgentModels
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_models() {
+        assert!(is_valid_model("sonnet"));
+        assert!(is_valid_model("claude-opus-5-5"));
+        assert!(!is_valid_model("--dangerously-skip-permissions"));
+        assert!(!is_valid_model("opus; rm -rf"));
+        assert!(!is_valid_model(""));
+    }
 
     #[test]
     fn parses_ok_outcome() {
@@ -972,7 +985,7 @@ async fn second_pass<R: Runtime>(app: &AppHandle<R>, config: &AgentConfig, meeti
     backup_live_transcript(&pool, meeting_id, Path::new(&folder)).await;
 
     let model = second_pass_model(app).await;
-    let alt_dir = crate::second_opinion::model_dir(app, &crate::meeting_detector::second_opinion(app));
+    let alt_dir = crate::second_opinion::alt_model(app, &crate::meeting_detector::second_opinion(app), model.as_deref());
     let started = std::time::Instant::now();
     log::info!("notion-agent: second pass ({:?}, {}) for {}", model, mode, meeting_id);
     match crate::audio::retranscription::start_retranscription_with_alt(app.clone(), meeting_id.to_string(), folder.clone(), None, model, Some("parakeet".to_string()), alt_dir).await {

@@ -58,6 +58,61 @@ function Row({ title, help, children }: { title: string; help?: React.ReactNode;
   );
 }
 
+const PARAKEET = 'parakeet:';
+const OTHER = '__other__';
+const CLAUDE_MODELS: [string, string][] = [
+  ['haiku', 'Claude Haiku (fastest)'],
+  ['sonnet', 'Claude Sonnet'],
+  ['opus', 'Claude Opus (most accurate, slower)'],
+];
+const claudeName = (m: string) => CLAUDE_MODELS.find(([v]) => v === m)?.[1].replace(/ \(.*\)$/, '') || m;
+
+/** Transcription model picker shared by the main and the second model: the same Parakeet list
+ *  (built-in + custom models added above), plus the extra entries each row needs. */
+function TranscriptionModelSelect({ value, onChange, parakeet, first, extra = [], exclude }: {
+  value: string; onChange: (v: string) => void; parakeet: string[];
+  first: [string, string]; extra?: [string, string][]; exclude?: string;
+}) {
+  const items: [string, string][] = [first, ...parakeet.filter((m) => m !== exclude).map((m) => [m, m] as [string, string]), ...extra];
+  const known = items.some(([v]) => v === value);
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {items.map(([v, label]) => <SelectItem key={v} value={v}>{label}</SelectItem>)}
+        {!known && <SelectItem value={value}>{value} (not found)</SelectItem>}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** Claude model picker shared by the clean-up and the recap: aliases always point at the latest
+ *  model of that family; "Other model…" accepts any model id the Claude CLI knows. */
+function ClaudeModelSelect({ value, onChange, recommended }: { value: string; onChange: (v: string) => void; recommended: string }) {
+  const [custom, setCustom] = useState(false);
+  const [text, setText] = useState('');
+  const isAlias = CLAUDE_MODELS.some(([v]) => v === value);
+  if (custom) {
+    const done = () => { const v = text.trim(); setCustom(false); if (v) onChange(v); };
+    return (
+      <Input autoFocus placeholder="e.g. claude-opus-5-5" value={text} onChange={(e) => setText(e.target.value)} onBlur={done}
+        onKeyDown={(e) => { if (e.key === 'Enter') done(); if (e.key === 'Escape') setCustom(false); }} className="w-80" />
+    );
+  }
+  return (
+    <Select value={value} onValueChange={(v) => { if (v === OTHER) { setText(isAlias ? '' : value); setCustom(true); } else onChange(v); }}>
+      <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {CLAUDE_MODELS.map(([v, label]) => (
+          <SelectItem key={v} value={v}>{v === recommended ? label.replace(/ \(.*\)$/, '') + ' (recommended)' : label}</SelectItem>
+        ))}
+        {!isAlias && <SelectItem value={value}>{value}</SelectItem>}
+        <SelectItem value={OTHER}>Other model…</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
 /** General tab: shortcut, audio retention, start with Windows. */
 export function MeetingAutomationSettings() {
   const { settings, save } = useAutoSettings();
@@ -152,8 +207,11 @@ export function PostMeetingSettings() {
   const installed = opinions.filter((m) => m.installed);
   const missing = opinions.filter((m) => !m.installed);
   const short = (s: string) => s.replace(/ \(.*\)$/, '');
-  const name = (m: string) => ({ haiku: 'Claude Haiku', sonnet: 'Claude Sonnet', opus: 'Claude Opus' } as Record<string, string>)[m] || m;
-  const opinionLabel = installed.find((m) => m.name === settings.second_opinion)?.label;
+  const name = claudeName;
+  const opinion = settings.second_opinion || '';
+  const secondValue = !opinion ? NONE : opinion.startsWith(PARAKEET) ? opinion.slice(PARAKEET.length) : opinion;
+  const mainResolved = settings.second_pass_model || parakeet.find((m) => m.toLowerCase().includes('ultra'));
+  const opinionLabel = opinion.startsWith(PARAKEET) ? secondValue : installed.find((m) => m.name === opinion)?.label;
   const steps: [string, boolean][] = [
     ['Live transcript', true],
     ['Re-transcribe: ' + (settings.second_pass_model ? short(settings.second_pass_model) : 'best model') + (opinionLabel ? ' + ' + short(opinionLabel) : ''), on],
@@ -191,25 +249,16 @@ export function PostMeetingSettings() {
 
       {on && (
         <>
-          <Row title="Main model" help="Automatic picks Parakeet ultra when it is among the custom models above.">
-            <Select value={settings.second_pass_model || AUTO} onValueChange={(v) => save({ second_pass_model: v === AUTO ? '' : v })}>
-              <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={AUTO}>Automatic (best installed)</SelectItem>
-                {parakeet.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                {settings.second_pass_model && !parakeet.includes(settings.second_pass_model) &&
-                  <SelectItem value={settings.second_pass_model}>{settings.second_pass_model} (not found)</SelectItem>}
-              </SelectContent>
-            </Select>
+          <Row title="Main model" help="Automatic picks Parakeet ultra when installed. Add any model in Custom Models above.">
+            <TranscriptionModelSelect value={settings.second_pass_model || AUTO} parakeet={parakeet}
+              first={[AUTO, 'Automatic (best installed)']}
+              onChange={(v) => save({ second_pass_model: v === AUTO ? '' : v })} />
           </Row>
-          <Row title="Second model" help="Optional. Specialised in the meeting language; Claude merges the two readings.">
-            <Select value={settings.second_opinion || NONE} onValueChange={(v) => save({ second_opinion: v === NONE ? '' : v })}>
-              <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>None</SelectItem>
-                {installed.map((m) => <SelectItem key={m.name} value={m.name}>{m.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <Row title="Second model" help="Optional, same list as the main model plus the language-specialised ones. Claude merges the two readings.">
+            <TranscriptionModelSelect value={secondValue} parakeet={parakeet} exclude={mainResolved}
+              first={[NONE, 'None']}
+              extra={installed.map((m) => [m.name, m.label] as [string, string])}
+              onChange={(v) => save({ second_opinion: v === NONE ? '' : installed.some((m) => m.name === v) ? v : PARAKEET + v })} />
           </Row>
           {missing.length > 0 && installed.length > 0 && !showMore && (
             <div className="flex justify-end pb-4 -mt-2">
@@ -236,24 +285,11 @@ export function PostMeetingSettings() {
 
       {claude && (
         <Row title="Text clean-up" help="Mechanical work: Haiku is enough and the fastest.">
-          <Select value={models.clean_model} onValueChange={(v) => saveModels({ clean_model: v })}>
-            <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="haiku">Claude Haiku (recommended)</SelectItem>
-              <SelectItem value="sonnet">Claude Sonnet</SelectItem>
-            </SelectContent>
-          </Select>
+          <ClaudeModelSelect value={models.clean_model} recommended="haiku" onChange={(v) => saveModels({ clean_model: v })} />
         </Row>
       )}
-      <Row title="Recap and tasks in Notion">
-        <Select value={models.recap_model} onValueChange={(v) => saveModels({ recap_model: v })}>
-          <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="sonnet">Claude Sonnet (recommended)</SelectItem>
-            <SelectItem value="opus">Claude Opus (most accurate, slower)</SelectItem>
-            <SelectItem value="haiku">Claude Haiku (fastest)</SelectItem>
-          </SelectContent>
-        </Select>
+      <Row title="Recap and tasks in Notion" help="Thinking work: Sonnet is the right balance.">
+        <ClaudeModelSelect value={models.recap_model} recommended="sonnet" onChange={(v) => saveModels({ recap_model: v })} />
       </Row>
       <Row title="Instructions for Claude" help={<>Two editable text files: <code>transcript-cleanup.md</code> and <code>meeting-to-notion.md</code>.</>}>
         <Button variant="outline" size="sm" onClick={() => invoke('prompts_open_folder')}>
