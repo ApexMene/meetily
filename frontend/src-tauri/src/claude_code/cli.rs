@@ -45,11 +45,8 @@ impl Error {
                 installation.executable,
                 installation.place()
             ),
-            Error::Cancelled => "Summary generation was cancelled".to_string(),
-            Error::TimedOut => format!(
-                "Claude Code did not answer within {} minutes",
-                GENERATION_TIMEOUT.as_secs() / 60
-            ),
+            Error::Cancelled => "Cancelled".to_string(),
+            Error::TimedOut => "Claude Code did not answer in time".to_string(),
             Error::Claude(message) if is_auth_error(message) => format!(
                 "Claude Code is not logged in to a Claude account in {}. Open a terminal there, run `claude` and use /login. ({})",
                 installation.place(),
@@ -61,32 +58,36 @@ impl Error {
     }
 }
 
-fn is_auth_error(message: &str) -> bool {
+pub fn is_auth_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     ["authenticate", "not logged in", "/login", "oauth", "credential"]
         .iter()
         .any(|marker| message.contains(marker))
 }
 
-/// Arguments of a print-mode completion: no tools, no MCP servers, no skills, no user/project
-/// settings (their hooks would run too) and no saved session.
-fn print_args(model: &str) -> Vec<&str> {
-    vec![
-        "--print",
-        "--output-format",
-        "json",
-        "--model",
-        model,
-        "--system-prompt",
-        SYSTEM_PROMPT,
-        "--tools",
-        "",
-        "--strict-mcp-config",
-        "--disable-slash-commands",
-        "--setting-sources",
-        "",
-        "--no-session-persistence",
-    ]
+/// What a print-mode run may use besides plain text.
+#[derive(Clone, Copy, Debug)]
+pub enum Tools<'a> {
+    /// No tools and no MCP servers (summaries, transcript clean-up).
+    None,
+    /// Only the listed tools (comma-separated) of the account's claude.ai connectors; built-in
+    /// tools stay denied. `--strict-mcp-config` is not passed because it would hide the connectors.
+    Connectors(&'a str),
+}
+
+/// Built-in tools denied when connector tools are allowed (`--tools ""` would hide those too).
+const BUILTIN_TOOLS: &str = "Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent";
+
+/// Arguments of a print-mode run: no skills, no user/project settings (their hooks would run too)
+/// and no saved session; tools as requested.
+fn print_args<'a>(model: &'a str, system_prompt: &'a str, tools: Tools<'a>) -> Vec<&'a str> {
+    let mut args = vec!["--print", "--output-format", "json", "--model", model, "--system-prompt", system_prompt];
+    match tools {
+        Tools::None => args.extend(["--tools", "", "--strict-mcp-config"]),
+        Tools::Connectors(allowed) => args.extend(["--allowedTools", allowed, "--disallowedTools", BUILTIN_TOOLS]),
+    }
+    args.extend(["--disable-slash-commands", "--setting-sources", "", "--no-session-persistence"]);
+    args
 }
 
 fn stdin_prompt(system_prompt: &str, user_prompt: &str) -> String {
@@ -96,10 +97,20 @@ fn stdin_prompt(system_prompt: &str, user_prompt: &str) -> String {
 /// The command that runs `claude <args>` for an installation. `ANTHROPIC_API_KEY` is removed so
 /// the CLI always uses the account login, never a key that happens to be in the environment.
 pub fn command<'a>(installation: &Installation, args: impl IntoIterator<Item = &'a str>) -> Command {
+    command_with_env(installation, &[], args)
+}
+
+/// Like [`command`], with extra environment variables (e.g. a proxy). In WSL they are passed to
+/// `env`, so values must be plain words (no spaces or quotes).
+pub fn command_with_env<'a>(
+    installation: &Installation,
+    env: &[(String, String)],
+    args: impl IntoIterator<Item = &'a str>,
+) -> Command {
     let mut command = match &installation.runtime {
         Runtime::Native => {
             let mut command = Command::new(&installation.executable);
-            command.env_remove("ANTHROPIC_API_KEY");
+            command.env_remove("ANTHROPIC_API_KEY").envs(env.iter().map(|(key, value)| (key, value)));
             // A neutral directory: no project CLAUDE.md or settings are picked up.
             command.current_dir(std::env::temp_dir());
             command
@@ -108,6 +119,7 @@ pub fn command<'a>(installation: &Installation, args: impl IntoIterator<Item = &
             let mut command = wsl_command(distro);
             command
                 .args(["--cd", "/tmp", "--exec", "env", "-u", "ANTHROPIC_API_KEY"])
+                .args(env.iter().map(|(key, value)| format!("{}={}", key, value)))
                 .arg(&installation.executable);
             command
         }
@@ -178,15 +190,62 @@ pub async fn complete(
     user_prompt: &str,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<String, Error> {
-    let command = command(installation, print_args(model));
-    let output = run(
-        command,
-        Some(stdin_prompt(system_prompt, user_prompt)),
-        GENERATION_TIMEOUT,
-        cancellation_token,
-    )
-    .await?;
+    let request = Request {
+        model,
+        system_prompt: SYSTEM_PROMPT,
+        instructions: system_prompt,
+        content: user_prompt,
+        tools: Tools::None,
+        env: &[],
+        timeout: GENERATION_TIMEOUT,
+    };
+    print(installation, &request, cancellation_token).await
+}
+
+/// A print-mode run. `instructions` and `content` travel through stdin; the rest are arguments.
+pub struct Request<'a> {
+    pub model: &'a str,
+    /// Short fixed sentence (a command-line argument, so plain words only).
+    pub system_prompt: &'a str,
+    pub instructions: &'a str,
+    pub content: &'a str,
+    pub tools: Tools<'a>,
+    pub env: &'a [(String, String)],
+    pub timeout: Duration,
+}
+
+pub async fn print(
+    installation: &Installation,
+    request: &Request<'_>,
+    cancellation_token: Option<&CancellationToken>,
+) -> Result<String, Error> {
+    let command = command_with_env(
+        installation,
+        request.env,
+        print_args(request.model, request.system_prompt, request.tools),
+    );
+    let stdin = stdin_prompt(request.instructions, request.content);
+    let output = run(command, Some(stdin), request.timeout, cancellation_token).await?;
     parse_print_result(&output)
+}
+
+/// `claude mcp list`: the configured MCP servers and claude.ai connectors with their connection
+/// state. Uses no model tokens.
+pub async fn mcp_list(installation: &Installation, env: &[(String, String)]) -> Result<String, Error> {
+    // Checking every connector can take a while, longer than `--version`.
+    let command = command_with_env(installation, env, ["mcp", "list"]);
+    let output = run(command, None, 2 * QUERY_TIMEOUT, None).await?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    if output.status.success() || is_auth_error(&text) {
+        Ok(text)
+    } else {
+        Err(Error::Failed(
+            last_line(&output.stderr)
+                .or_else(|| last_line(&output.stdout))
+                .unwrap_or_else(|| format!("exited with {}", output.status)),
+        ))
+    }
 }
 
 /// The final message of `--output-format json`.
@@ -275,8 +334,8 @@ mod tests {
 
     #[test]
     fn same_cli_call_for_every_environment() {
-        let native = argv(&command(&installation(Runtime::Native), print_args("sonnet")));
-        let wsl = argv(&command(&installation(Runtime::Wsl { distro: "Ubuntu".into() }), print_args("sonnet")));
+        let native = argv(&command(&installation(Runtime::Native), print_args("sonnet", SYSTEM_PROMPT, Tools::None)));
+        let wsl = argv(&command(&installation(Runtime::Wsl { distro: "Ubuntu".into() }), print_args("sonnet", SYSTEM_PROMPT, Tools::None)));
 
         assert_eq!(native[0], "/home/u/.local/bin/claude");
         assert_eq!(
@@ -290,20 +349,44 @@ mod tests {
     #[test]
     fn arguments_are_plain_words() {
         // Arguments may pass through cmd.exe (npm's claude.cmd) or wsl.exe: keep them simple.
-        for arg in print_args("sonnet") {
-            assert!(
-                arg.chars().all(|c| c.is_ascii_alphanumeric() || " -.,".contains(c)),
-                "unsafe argument: {:?}",
-                arg
-            );
+        let connectors = Tools::Connectors("mcp__claude_ai_Notion__notion-search,mcp__claude_ai_Notion__notion-fetch");
+        for tools in [Tools::None, connectors] {
+            for arg in print_args("sonnet", SYSTEM_PROMPT, tools) {
+                assert!(
+                    arg.chars().all(|c| c.is_ascii_alphanumeric() || " -.,_".contains(c)),
+                    "unsafe argument: {:?}",
+                    arg
+                );
+            }
         }
+    }
+
+    #[test]
+    fn connector_runs_deny_builtin_tools_and_stay_isolated() {
+        let args = print_args("sonnet", SYSTEM_PROMPT, Tools::Connectors("mcp__x__y"));
+        let after = |flag: &str| args.iter().position(|a| *a == flag).map(|i| args[i + 1]);
+        assert_eq!(after("--allowedTools"), Some("mcp__x__y"));
+        assert_eq!(after("--disallowedTools"), Some(BUILTIN_TOOLS));
+        assert_eq!(after("--setting-sources"), Some(""));
+        // `--tools ""` would hide the connector tools as well.
+        assert!(!args.contains(&"--tools"));
+    }
+
+    #[test]
+    fn environment_reaches_both_launchers() {
+        let env = vec![("HTTPS_PROXY".to_string(), "http://127.0.0.1:8080".to_string())];
+        let wsl = argv(&command_with_env(&installation(Runtime::Wsl { distro: "Ubuntu".into() }), &env, ["--version"]));
+        assert_eq!(wsl[9..], ["HTTPS_PROXY=http://127.0.0.1:8080", "/home/u/.local/bin/claude", "--version"]);
+        let native = command_with_env(&installation(Runtime::Native), &env, ["--version"]);
+        let value = native.as_std().get_envs().find(|(key, _)| *key == "HTTPS_PROXY").and_then(|(_, value)| value);
+        assert_eq!(value.map(|v| v.to_string_lossy().into_owned()), Some("http://127.0.0.1:8080".to_string()));
     }
 
     #[test]
     fn prompt_goes_through_stdin() {
         let prompt = stdin_prompt("Fill the template.", "<transcript>hello</transcript>");
         assert_eq!(prompt, "<instructions>\nFill the template.\n</instructions>\n\n<transcript>hello</transcript>");
-        assert!(!print_args("sonnet").iter().any(|arg| arg.contains("transcript")));
+        assert!(!print_args("sonnet", SYSTEM_PROMPT, Tools::None).iter().any(|arg| arg.contains("transcript")));
     }
 
     #[test]

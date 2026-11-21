@@ -43,13 +43,14 @@ pub mod claude_code; // Fork: Claude Code summary provider
 pub mod config;
 pub mod console_utils;
 pub mod custom_models; // Fork: user-added transcription and summary models
-pub use custom_models::second_opinion;
 pub mod database;
 pub mod doodle;
 pub mod notifications;
-pub mod meeting_detector; // Fork: auto start/stop on meeting mic use
-pub mod notion_agent; // Fork: post-meeting Notion agent (via Claude Code)
-pub mod health; // Fork: health check (Claude, Notion, network, mic)
+mod fork_store; // Fork: small JSON settings files
+pub mod health; // Fork: health check of the meeting -> Notion flow
+pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, audio retention
+pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
+pub mod post_meeting; // Fork: re-transcription, clean-up and Notion after the meeting
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;
@@ -568,17 +569,10 @@ pub fn run() {
                 !cwd.is_empty()
             );
 
-            tray::focus_main_window(app);
             // Fork: clicking a Meetily notification relaunches the app; while recording, show
             // the live transcript page.
             let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                if crate::audio::recording_commands::is_recording().await {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.eval("if (window.location.pathname !== '/') window.location.assign('/')");
-                    }
-                }
-            });
+            tauri::async_runtime::spawn(async move { tray::show_live_transcript(&app).await });
         }));
     }
 
@@ -726,17 +720,17 @@ pub fn run() {
             tauri::async_runtime::block_on(custom_models::init(_app.handle()));
             // Fork: load the Claude Code provider settings.
             tauri::async_runtime::block_on(claude_code::init(_app.handle()));
-            // Fork: post-meeting Notion agent worker (persistent queue + retries).
-            notion_agent::start(_app.handle().clone());
+            // Fork: optional features, all off until turned on in Settings.
+            custom_models::latin_filter::apply(_app.handle());
+            post_meeting::start(_app.handle().clone());
             health::start(_app.handle().clone());
+            meeting_automation::start(_app.handle().clone());
             // Fork: started by Windows at logon -> stay in the tray, no window.
-            if std::env::args().any(|a| a == "--autostart") {
+            if std::env::args().any(|a| a == meeting_automation::AUTOSTART_FLAG) {
                 if let Some(window) = _app.get_webview_window("main") {
                     let _ = window.hide();
                 }
             }
-            // Fork: start/stop recording automatically when a meeting app uses the microphone.
-            meeting_detector::start(_app.handle().clone());
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
@@ -763,25 +757,28 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            // Fork: meeting bar buttons (meeting_detector)
-            meeting_detector::meeting_pill_open,
-            meeting_detector::meeting_pill_stop,
-            meeting_detector::meeting_pill_close,
-            meeting_detector::meeting_pill_drag,
-            meeting_detector::meeting_pill_compact,
-            meeting_detector::auto_settings_get,
+            // Fork: automatic meetings and the meeting bar
+            meeting_automation::automation_settings_get,
+            meeting_automation::automation_settings_set,
+            meeting_automation::bar::meeting_bar_open,
+            meeting_automation::bar::meeting_bar_stop,
+            meeting_automation::bar::meeting_bar_close,
+            meeting_automation::bar::meeting_bar_drag,
+            meeting_automation::bar::meeting_bar_compact,
+            // Fork: after the meeting (re-transcription, clean-up, Notion)
+            post_meeting::post_meeting_settings_get,
+            post_meeting::post_meeting_settings_set,
+            post_meeting::post_meeting_open_folder,
+            post_meeting::jobs::post_meeting_jobs,
+            post_meeting::jobs::post_meeting_retry,
+            post_meeting::jobs::post_meeting_open_url,
+            post_meeting::jobs::post_meeting_open_jobs,
             health::health_status,
             health::health_run,
-            meeting_detector::auto_settings_set,
-            notion_agent::agent_models_get,
-            notion_agent::agent_models_set,
-            second_opinion::second_opinion_list,
-            second_opinion::second_opinion_install,
-            second_opinion::prompts_open_folder,
-            notion_agent::notion_agent_jobs,
-            notion_agent::notion_agent_retry,
-            notion_agent::notion_agent_open_url,
-            notion_agent::notion_agent_open_jobs,
+            custom_models::second_opinion::second_opinion_list,
+            custom_models::second_opinion::second_opinion_install,
+            custom_models::latin_filter::latin_filter_get,
+            custom_models::latin_filter::latin_filter_set,
             start_recording,
             stop_recording,
             is_recording,

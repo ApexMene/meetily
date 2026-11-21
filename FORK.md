@@ -27,6 +27,13 @@ non vanno in conflitto:
   l'account Claude, nessuna API key), nativa o in WSL. Dettagli in
   [docs/fork/claude-code-provider.md](docs/fork/claude-code-provider.md).
   Codice in `frontend/src-tauri/src/claude_code/` e `frontend/src/components/ClaudeCode/`.
+- **Meeting automatici e lavoro dopo il meeting** (tutto spento di default): registrazione automatica
+  quando un'app di meeting usa il microfono, barra del meeting, scorciatoia globale, cancellazione
+  dell'audio vecchio, avvio con Windows, filtro "solo alfabeto latino" per Parakeet, nuova trascrizione
+  a fine meeting con pulizia di Claude e resoconto in Notion. Dettagli in
+  [docs/fork/meeting-automation.md](docs/fork/meeting-automation.md). Codice in
+  `frontend/src-tauri/src/meeting_automation/`, `post_meeting/`, `notion_agent/` e
+  `frontend/src/components/ForkSettings.tsx`.
 
 Durante un merge da upstream, cercare `Fork:` per ritrovare tutti gli agganci.
 

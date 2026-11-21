@@ -112,7 +112,7 @@ export default function SettingsPage() {
 
             <TabsContent value="general">
               <PreferenceSettings />
-              <div className="mt-6"><MeetingAutomationSettings /></div>
+              <MeetingAutomationSettings />
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />

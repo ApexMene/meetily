@@ -622,8 +622,8 @@ impl SummaryService {
                             }
                         }
                         info!("Summary saved successfully for meeting_id: {}", meeting_id);
-                        // Fork: hand the meeting to the post-meeting Notion agent.
-                        crate::notion_agent::enqueue(&app, &meeting_id);
+                        // Fork: queue the after-meeting work (crate::post_meeting).
+                        crate::post_meeting::enqueue(&app, &meeting_id);
                     }
                     Ok(false) => warn!("Skipped stale summary completion for meeting_id: {}", meeting_id),
                     Err(error) => error!(

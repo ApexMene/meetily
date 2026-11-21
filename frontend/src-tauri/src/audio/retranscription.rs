@@ -491,6 +491,11 @@ async fn run_retranscription<R: Runtime>(
 
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
+    // Fork: no speech transcribed (silence, failing model): keep the current transcript.
+    if all_transcripts.is_empty() {
+        return Err(anyhow!("No speech was transcribed; the current transcript is kept"));
+    }
+
     // Create transcript segments with proper timestamps from VAD
     let segments = create_transcript_segments(&all_transcripts);
 
@@ -710,7 +715,6 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
     }
 }
 
-/// Get or initialize the Parakeet engine, auto-loading the model if needed
 /// Fork: a failed second opinion is skipped (the main transcript is enough); cancellation is not.
 fn alt_outcome(outcome: Result<Vec<String>>, started: std::time::Instant) -> Result<Option<Vec<String>>> {
     match outcome {
@@ -726,6 +730,7 @@ fn alt_outcome(outcome: Result<Vec<String>>, started: std::time::Instant) -> Res
     }
 }
 
+/// Get or initialize the Parakeet engine, auto-loading the model if needed
 async fn get_or_init_parakeet<R: Runtime>(
     app: &AppHandle<R>,
     requested_model: Option<&str>,

@@ -61,7 +61,8 @@ pub const PARAKEET_PREFIX: &str = "parakeet:";
 /// A valid stored setting: empty, a CTC folder name or `parakeet:<model name>`.
 pub fn is_valid_setting(value: &str) -> bool {
     match value.strip_prefix(PARAKEET_PREFIX) {
-        Some(name) => !name.trim().is_empty() && name.len() <= 200 && !name.contains(['/', '\\']),
+        // A folder name: no separators, no "." or "..".
+        Some(name) => !name.trim_matches(['.', ' ']).is_empty() && name.len() <= 200 && !name.contains(['/', '\\']),
         None => value.is_empty() || is_safe_name(value),
     }
 }
@@ -130,7 +131,7 @@ pub async fn second_opinion_list<R: Runtime>(app: AppHandle<R>) -> Vec<SecondOpi
 /// Downloads a catalog model. Resolves when the download is complete (can take minutes).
 #[tauri::command]
 pub async fn second_opinion_install<R: Runtime>(app: AppHandle<R>, name: String) -> Result<(), String> {
-    let entry = CATALOG.iter().find(|e| e.name == name).ok_or("modello sconosciuto")?;
+    let entry = CATALOG.iter().find(|e| e.name == name).ok_or("unknown model")?;
     let root = root(&app).ok_or("no app data dir")?;
     let staging = root.join(format!(".{}.partial", entry.name));
     let _ = std::fs::remove_dir_all(&staging);
@@ -162,12 +163,4 @@ pub async fn second_opinion_install<R: Runtime>(app: AppHandle<R>, name: String)
     }
     log::info!("second opinion: {} installed", entry.name);
     Ok(())
-}
-
-/// Opens the folder holding the editable Claude prompts.
-#[tauri::command]
-pub async fn prompts_open_folder<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("notion-agent");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    open::that_detached(&dir).map_err(|e| e.to_string())
 }

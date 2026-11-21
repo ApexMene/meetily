@@ -75,17 +75,6 @@
                             ]
                         }
                     ]
-                },
-                {
-                    "identifier": "meeting-pill",
-                    "description": "Fork: meeting bar and Notion jobs window (only their own commands)",
-                    "windows": [
-                        "meeting-pill",
-                        "notion-jobs"
-                    ],
-                    "permissions": [
-                        "core:default"
-                    ]
                 }
             ]
         }
@@ -125,11 +114,7 @@
         ],
         "linux": {
             "deb": {
-                "depends": [
-                    "libvulkan1",
-                    "libpulse0",
-                    "libasound2"
-                ]
+                "depends": ["libvulkan1", "libpulse0", "libasound2"]
             }
         },
         "macOS": {

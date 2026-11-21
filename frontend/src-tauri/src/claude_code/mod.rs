@@ -120,11 +120,6 @@ async fn installation() -> Result<Installation, String> {
     Ok(found)
 }
 
-/// Fork: the resolved installation, for the post-meeting Notion agent (`crate::notion_agent`).
-pub(crate) async fn agent_installation() -> Result<Installation, String> {
-    installation().await
-}
-
 async fn forget_installation() {
     STATE.lock().await.installation = None;
 }
@@ -148,8 +143,59 @@ pub async fn generate(
     result.map_err(|error| error.user_message(&installation))
 }
 
+// Post-meeting features (`crate::post_meeting`, `crate::notion_agent`, `crate::health`) run
+// Claude Code through the same installation and the same launcher as the summaries.
+
+pub use cli::{Request, Tools};
+
+/// One print-mode run with the saved configuration.
+pub async fn run(request: &Request<'_>, cancellation_token: Option<&CancellationToken>) -> Result<String, String> {
+    if !is_model_id(request.model) {
+        return Err(format!("Invalid Claude model \"{}\"", request.model));
+    }
+    let installation = installation().await?;
+    let result = cli::print(&installation, request, cancellation_token).await;
+    if matches!(result, Err(cli::Error::NotFound)) {
+        forget_installation().await;
+    }
+    result.map_err(|error| error.user_message(&installation))
+}
+
+/// Where Claude Code runs ("this computer", "WSL (Ubuntu)") and the output of `claude mcp list`,
+/// which reports the state of the account's connectors without using the model.
+pub async fn connectors(env: &[(String, String)]) -> Result<(String, String), String> {
+    let installation = installation().await?;
+    let listing = cli::mcp_list(&installation, env).await.map_err(|error| error.user_message(&installation))?;
+    if cli::is_auth_error(&listing) {
+        return Err(cli::Error::Claude(listing).user_message(&installation));
+    }
+    Ok((installation.place(), listing))
+}
+
+/// A CLI model alias (`haiku`, `sonnet`, `opus`) or a full model id such as `claude-opus-5-5`.
+/// It becomes a command-line argument, so only plain characters are accepted.
+pub fn is_model_id(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 80
+        && !model.starts_with('-')
+        && model.chars().all(|c| c.is_ascii_alphanumeric() || "-._[]".contains(c))
+}
+
 /// End-to-end through `generate` with automatic detection; sends one tiny prompt when logged in:
 /// `cargo test -p meetily --lib claude_code::live -- --ignored --nocapture`.
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn accepts_only_model_ids() {
+        assert!(super::is_model_id("sonnet"));
+        assert!(super::is_model_id("claude-opus-5-5"));
+        assert!(super::is_model_id("opus[1m]"));
+        assert!(!super::is_model_id("--dangerously-skip-permissions"));
+        assert!(!super::is_model_id("opus; rm -rf"));
+        assert!(!super::is_model_id(""));
+    }
+}
+
 #[cfg(test)]
 mod live {
     #[tokio::test]

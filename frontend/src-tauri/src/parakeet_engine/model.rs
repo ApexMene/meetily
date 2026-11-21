@@ -52,10 +52,13 @@ pub struct ParakeetModel {
     vocab: Vec<String>,
     blank_idx: i32,
     vocab_size: usize,
-    /// Fork: tokens the decoder may emit. Only Latin-script tokens (Italian/English), so the
+    /// Fork: Latin-script tokens. With [`LATIN_ONLY`] on, the decoder emits only these, so the
     /// multilingual model can't drift into Cyrillic or Greek.
     allowed: Vec<bool>,
 }
+
+/// Fork: restricts the output to Latin-script tokens (Settings > Transcription). Off by default.
+pub static LATIN_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Fork: true when every character of a vocabulary token is Latin script, digits or punctuation.
 pub(crate) fn is_latin_token(token: &str) -> bool {
@@ -364,6 +367,7 @@ impl ParakeetModel {
         let mut prev_state = self.create_decoder_state()?;
         let mut tokens = Vec::new();
         let mut timestamps = Vec::new();
+        let latin_only = LATIN_ONLY.load(std::sync::atomic::Ordering::Relaxed); // Fork
 
         let mut t = 0;
         let mut emitted_tokens = 0;
@@ -397,7 +401,9 @@ impl ParakeetModel {
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| {
-                    *idx as i32 == self.blank_idx || self.allowed.get(*idx).copied().unwrap_or(true)
+                    !latin_only
+                        || *idx as i32 == self.blank_idx
+                        || self.allowed.get(*idx).copied().unwrap_or(true)
                 })
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(idx, _)| idx as i32)

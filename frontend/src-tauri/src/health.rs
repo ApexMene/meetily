@@ -1,11 +1,10 @@
-//! Fork: health check. Verifies, without spending Claude usage, that everything the automatic
-//! meeting -> Notion flow needs is working, repairs what it can, and warns before a meeting
-//! instead of after it.
+//! Fork: health check of the meeting -> Notion flow. Runs hourly only while the Notion agent is
+//! on, uses no Claude tokens (`claude mcp list`), repairs what it can and warns before a meeting
+//! instead of after it. Shown in the "After the meeting" window.
 
 use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, Runtime};
-use tokio::process::Command;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Check {
@@ -15,6 +14,7 @@ pub struct Check {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthReport {
     checked_at: Option<String>,
     checks: Vec<Check>,
@@ -24,151 +24,130 @@ static REPORT: std::sync::Mutex<Option<HealthReport>> = std::sync::Mutex::new(No
 static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn check(name: &str, result: Result<String, String>) -> Check {
-    match result {
-        Ok(detail) => Check { name: name.into(), ok: true, detail },
-        Err(detail) => Check { name: name.into(), ok: false, detail },
-    }
+    let (ok, detail) = match result {
+        Ok(detail) => (true, detail),
+        Err(detail) => (false, detail),
+    };
+    Check { name: name.into(), ok, detail }
 }
 
-fn microphone() -> Result<String, String> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-    let device = cpal::default_host().default_input_device().ok_or("nessun microfono predefinito in Windows")?;
-    Ok(device.name().unwrap_or_else(|_| "microfono predefinito".into()))
+/// Device enumeration can block for a while (audio drivers): off the async runtime.
+async fn microphone() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let device = cpal::default_host().default_input_device().ok_or("no default microphone")?;
+        Ok(device.name().unwrap_or_else(|_| "default microphone".into()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
-fn ffmpeg() -> Result<String, String> {
-    let dir = std::env::current_exe().map_err(|e| e.to_string())?;
-    let path = dir.parent().map(|d| d.join("ffmpeg.exe")).ok_or("cartella app sconosciuta")?;
-    if path.is_file() { Ok("presente".into()) } else { Err(format!("manca {}", path.display())) }
+/// Host and port of a proxy URL such as `http://127.0.0.1:8080/`.
+fn proxy_address(proxy: &str) -> &str {
+    let proxy = proxy.trim();
+    let proxy = proxy.split_once("://").map_or(proxy, |(_, rest)| rest);
+    proxy.split('/').next().unwrap_or_default()
 }
 
 async fn proxy_reachable(proxy: &str) -> Result<String, String> {
-    let host = proxy.trim().trim_start_matches("http://").trim_start_matches("https://").trim_end_matches('/');
-    if host.is_empty() {
-        return Ok("nessun proxy configurato".into());
+    let address = proxy_address(proxy);
+    if address.is_empty() {
+        return Ok("no proxy configured".into());
     }
-    match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(host)).await {
-        Ok(Ok(_)) => Ok(format!("{} raggiungibile", host)),
-        Ok(Err(e)) => Err(format!("{} non risponde ({})", host, e)),
-        Err(_) => Err(format!("{} non risponde (timeout)", host)),
+    match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(address)).await {
+        Ok(Ok(_)) => Ok(format!("{} reachable", address)),
+        Ok(Err(error)) => Err(format!("{} does not answer ({})", address, error)),
+        Err(_) => Err(format!("{} does not answer (timeout)", address)),
     }
 }
 
-/// `claude mcp list` checks the connectors' login without using any model tokens.
+/// The state of the claude.ai Notion connector in a `claude mcp list` listing.
+fn notion_state(listing: &str) -> Result<String, String> {
+    match listing.lines().find(|line| line.contains("claude.ai Notion")) {
+        Some(line) if line.contains("Connected") => Ok("connected".into()),
+        Some(_) => Err("Notion connection expired: reconnect Notion in claude.ai › Settings › Connectors".into()),
+        None => Err("Notion connector not found in claude.ai".into()),
+    }
+}
+
 async fn claude_and_notion(env: &[(String, String)]) -> (Result<String, String>, Result<String, String>) {
-    let installation = match crate::claude_code::agent_installation().await {
-        Ok(installation) => installation,
-        Err(e) => return (Err(format!("Claude Code non trovato: {}", e)), Err("non verificabile senza Claude".into())),
-    };
-    let mut command = match &installation.runtime {
-        crate::claude_code::Runtime::Native => {
-            let mut command = Command::new(&installation.executable);
-            command.env_remove("ANTHROPIC_API_KEY");
-            for (key, value) in env {
-                command.env(key, value);
-            }
-            command
-        }
-        crate::claude_code::Runtime::Wsl { distro } => {
-            let mut command = Command::new("wsl.exe");
-            command.args(["-d", distro, "--cd", "/tmp", "--exec", "env", "-u", "ANTHROPIC_API_KEY"]);
-            for (key, value) in env {
-                command.arg(format!("{}={}", key, value));
-            }
-            command.arg(&installation.executable);
-            command
-        }
-    };
-    command.args(["mcp", "list"]).kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    match crate::claude_code::connectors(env).await {
+        Ok((place, listing)) => (Ok(place), notion_state(&listing)),
+        Err(error) => (Err(error), Err("cannot be checked without Claude Code".into())),
     }
-    let output = match tokio::time::timeout(Duration::from_secs(120), command.output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return (Err(format!("Claude non parte: {}", e)), Err("non verificabile".into())),
-        Err(_) => return (Err("Claude non risponde (timeout)".into()), Err("non verificabile".into())),
-    };
-    let text = String::from_utf8_lossy(&output.stdout).to_string() + &String::from_utf8_lossy(&output.stderr);
-    let lower = text.to_lowercase();
-    if lower.contains("not logged in") || lower.contains("please run /login") || lower.contains("invalid api key") {
-        return (Err("Claude non e' collegato all'account: apri un terminale e fai login".into()), Err("non verificabile".into()));
-    }
-    let claude = Ok(installation.place());
-    let notion = match text.lines().find(|l| l.contains("claude.ai Notion")) {
-        Some(line) if line.contains("Connected") => Ok("collegato".into()),
-        Some(_) => Err("collegamento Notion scaduto: riconnetti Notion in claude.ai > Impostazioni > Connettori".into()),
-        None if output.status.success() => Err("connettore Notion non trovato in claude.ai".into()),
-        None => Err(format!("controllo fallito: {}", text.lines().last().unwrap_or("").trim())),
-    };
-    (claude, notion)
 }
 
-/// Runs a Windows scheduled task named in `.env` (REPAIR_TASK), e.g. a proxy bridge.
+/// Starts the Windows scheduled task named in `.env` (`REPAIR_TASK`), e.g. a proxy bridge.
+#[cfg(windows)]
 async fn repair(task: &str) {
-    if task.is_empty() {
-        return;
-    }
-    log::info!("health: starting repair task {}", task);
-    let mut command = Command::new("schtasks");
-    command.args(["/Run", "/TN", task]);
-    #[cfg(windows)]
-    {
-        command.creation_flags(0x08000000);
-    }
-    let _ = command.output().await;
+    log::info!("health: starting the repair task");
+    let _ = tokio::process::Command::new("schtasks")
+        .args(["/Run", "/TN", task])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .await;
     tokio::time::sleep(Duration::from_secs(10)).await;
 }
+
+#[cfg(not(windows))]
+async fn repair(_task: &str) {}
 
 pub async fn run<R: Runtime>(app: &AppHandle<R>) -> HealthReport {
     let _guard = RUNNING.lock().await;
     let (env, repair_task) = crate::notion_agent::health_inputs(app);
-    let proxy = env.iter().find(|(k, _)| k == "HTTPS_PROXY").map(|(_, v)| v.clone()).unwrap_or_default();
+    let proxy = env.iter().find(|(key, _)| key == "HTTPS_PROXY").map(|(_, value)| value.as_str()).unwrap_or_default();
 
-    let mut network = proxy_reachable(&proxy).await;
+    let mut network = proxy_reachable(proxy).await;
     if network.is_err() && !repair_task.is_empty() {
         repair(&repair_task).await;
-        network = proxy_reachable(&proxy).await.map(|ok| format!("{} (riparato)", ok));
+        network = proxy_reachable(proxy).await.map(|ok| format!("{} (repaired)", ok));
     }
     let (claude, notion) = claude_and_notion(&env).await;
-    let mut checks = vec![
-        check("Microfono", microphone()),
-        check("Conversione audio (ffmpeg)", ffmpeg()),
-        check("Rete / proxy", network),
-        check("Claude", claude),
+    let failing = crate::post_meeting::failing_jobs(app);
+    let checks = vec![
+        check("Microphone", microphone().await),
+        check("Network / proxy", network),
+        check("Claude Code", claude),
         check("Notion", notion),
+        check(
+            "Failing meetings",
+            if failing == 0 { Ok("none".into()) } else { Err(format!("{} meetings are being retried: see the list below", failing)) },
+        ),
     ];
-    let stuck = crate::notion_agent::failing_jobs(app);
-    checks.push(check(
-        "Resoconti in errore",
-        if stuck == 0 { Ok("nessuno".into()) } else { Err(format!("{} meeting in errore: vedi la lista sotto", stuck)) },
-    ));
-
     let report = HealthReport { checked_at: Some(chrono::Utc::now().to_rfc3339()), checks };
-    let previous = REPORT.lock().ok().and_then(|mut r| r.replace(report.clone()));
-    let failed: Vec<&Check> = report.checks.iter().filter(|c| !c.ok).collect();
-    let was_failed = |name: &str| previous.as_ref().is_some_and(|p| p.checks.iter().any(|c| c.name == name && !c.ok));
-    let new_failures: Vec<&&Check> = failed.iter().filter(|c| !was_failed(&c.name)).collect();
-    if !new_failures.is_empty() {
-        use tauri_plugin_notification::NotificationExt;
-        let body = new_failures.iter().map(|c| format!("{}: {}", c.name, c.detail)).collect::<Vec<_>>().join("\n");
-        let _ = app.notification().builder().title("Meetily: qualcosa non funziona").body(body).show();
-    }
-    if failed.is_empty() && previous.as_ref().is_some_and(|p| p.checks.iter().any(|c| !c.ok)) {
-        crate::notion_agent::wake(); // fixed: retry queued recaps now
-    }
+    let previous = REPORT.lock().ok().and_then(|mut stored| stored.replace(report.clone()));
+    notify_changes(app, previous.as_ref(), &report);
     log::info!(
         "health: {}",
-        report.checks.iter().map(|c| format!("{}={}", c.name, if c.ok { "ok" } else { "KO" })).collect::<Vec<_>>().join(", ")
+        report.checks.iter().map(|c| format!("{}={}", c.name, if c.ok { "ok" } else { "failed" })).collect::<Vec<_>>().join(", ")
     );
     report
+}
+
+/// Warns about newly failed checks; when everything works again, retries the queue now.
+fn notify_changes<R: Runtime>(app: &AppHandle<R>, previous: Option<&HealthReport>, report: &HealthReport) {
+    let failed_before = |name: &str| previous.is_some_and(|p| p.checks.iter().any(|c| c.name == name && !c.ok));
+    let new_failures: Vec<String> = report
+        .checks
+        .iter()
+        .filter(|c| !c.ok && !failed_before(&c.name))
+        .map(|c| format!("{}: {}", c.name, c.detail))
+        .collect();
+    if !new_failures.is_empty() {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title("Meetily: something is not working").body(new_failures.join("\n")).show();
+    }
+    let all_ok = report.checks.iter().all(|c| c.ok);
+    if all_ok && previous.is_some_and(|p| p.checks.iter().any(|c| !c.ok)) {
+        crate::post_meeting::wake();
+    }
 }
 
 pub fn start<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(90)).await;
         loop {
-            if !crate::audio::recording_commands::is_recording().await {
+            if crate::notion_agent::is_enabled(&app) && !crate::audio::recording_commands::is_recording().await {
                 run(&app).await;
             }
             tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -178,10 +157,29 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
 
 #[tauri::command]
 pub async fn health_status() -> HealthReport {
-    REPORT.lock().ok().and_then(|r| r.clone()).unwrap_or_default()
+    REPORT.lock().ok().and_then(|report| report.clone()).unwrap_or_default()
 }
 
 #[tauri::command]
 pub async fn health_run<R: Runtime>(app: AppHandle<R>) -> HealthReport {
     run(&app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_proxy_address() {
+        assert_eq!(proxy_address("http://127.0.0.1:8080/"), "127.0.0.1:8080");
+        assert_eq!(proxy_address("proxy:3128"), "proxy:3128");
+        assert_eq!(proxy_address(""), "");
+    }
+
+    #[test]
+    fn reads_notion_state() {
+        assert!(notion_state("claude.ai Notion: https://mcp.notion.com - ✔ Connected").is_ok());
+        assert!(notion_state("claude.ai Notion: https://mcp.notion.com - ! Needs authentication").is_err());
+        assert!(notion_state("github: ok").is_err());
+    }
 }

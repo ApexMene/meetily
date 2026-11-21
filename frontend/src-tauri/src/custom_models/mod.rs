@@ -19,6 +19,7 @@ mod paths;
 mod probe;
 mod registry;
 pub mod summary_hooks;
+pub mod latin_filter; // Fork: optional Latin-only Parakeet output
 pub mod second_opinion; // Fork: second-opinion CTC models for the post-meeting pass
 
 use serde::{Deserialize, Serialize};

@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Fork: always-on-top meeting bar (src-tauri/src/meeting_automation/bar.rs). Plain HTML: no app layout. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meetily · Recording</title>
+<link rel="stylesheet" href="meeting-bar.css">
+</head>
+<body>
+<div class="bar" id="bar">
+  <img src="icon_128x128.png" alt="" class="logo">
+  <div class="text">
+    <div class="title"><span class="dot" id="dot"></span><span id="title">Recording</span> <span id="clock" class="clock"></span></div>
+    <div class="sub" id="sub"></div>
+  </div>
+  <button class="primary" id="open">Open transcript</button>
+  <button class="secondary" id="stop">Stop</button>
+  <button class="close" id="min" title="Make smaller">&minus;</button>
+  <button class="close" id="close" title="Minimise to the taskbar (recording continues)">&times;</button>
+</div>
+<div class="mini hidden" id="mini" title="Click to enlarge, drag to move">
+  <span class="dot" id="mdot"></span><span class="clock" id="mclock"></span>
+  <img src="icon_128x128.png" alt="" class="mlogo">
+</div>
+<script src="meeting-bar.js"></script>
+</body>
+</html>

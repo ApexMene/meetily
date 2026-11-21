@@ -51,21 +51,21 @@ pub fn model_file(dir: &Path) -> Option<PathBuf> {
 /// Problems that make `dir` unusable as a CTC model, or None.
 pub fn check_dir(dir: &Path) -> Option<String> {
     if model_file(dir).is_none() {
-        return Some("model.onnx / model.int8.onnx mancante".into());
+        return Some("model.onnx or model.int8.onnx missing".into());
     }
     if !dir.join("vocab.txt").is_file() {
-        return Some("vocab.txt mancante".into());
+        return Some("vocab.txt missing".into());
     }
     if let Ok(text) = std::fs::read_to_string(dir.join("config.json")) {
         let config: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
         if let Some(kind) = config.get("model_type").and_then(|v| v.as_str()) {
             if !kind.contains("ctc") {
-                return Some(format!("tipo {} non supportato (serve un modello CTC)", kind));
+                return Some(format!("model type {} not supported (a CTC model is needed)", kind));
             }
         }
         if let Some(size) = config.get("features_size").and_then(|v| v.as_i64()) {
             if size != 80 {
-                return Some(format!("{} mel non supportati (serve 80)", size));
+                return Some(format!("{} mel features not supported (80 needed)", size));
             }
         }
     }

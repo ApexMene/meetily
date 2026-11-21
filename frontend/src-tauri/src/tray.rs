@@ -49,7 +49,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             }
         }
         "check_updates" => check_updates_handler(app),
-        "notion_jobs" => crate::notion_agent::open_jobs_window(app),
+        "post_meeting_jobs" => crate::post_meeting::open_jobs_window(app),
         "quit" => app.exit(0),
         _ => {}
     }
@@ -106,14 +106,8 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
                 }
             }
         } else {
-            // Immediately show starting state
-            set_tray_state(&app_clone, RecordingState::Starting);
-
             log::info!("Emitting start recording event from tray");
-            if let Some(window) = app_clone.get_webview_window("main") {
-                let _ = window.eval("sessionStorage.setItem('autoStartRecording', 'true')"); // Set the flag to start recording automatically
-                let _ = window.eval("window.location.assign('/')");
-            }
+            start_recording_from_app(&app_clone);
         }
     });
 }
@@ -206,8 +200,8 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-/// Fork: start a recording from Rust (meeting auto-detection). Same path as the tray: the
-/// frontend starts the recording when it loads `/` with the `autoStartRecording` flag.
+/// Starts a recording: the frontend starts it when it loads `/` with the `autoStartRecording`
+/// flag. Fork: also used by the meeting automation (detector, global shortcut).
 pub(crate) fn start_recording_from_app<R: Runtime>(app: &AppHandle<R>) {
     set_tray_state(app, RecordingState::Starting);
     if let Some(window) = app.get_webview_window("main") {
@@ -216,9 +210,19 @@ pub(crate) fn start_recording_from_app<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Fork: stop a recording from Rust (meeting auto-detection). Same path as the tray Stop item.
+/// Fork: stops a recording like the tray Stop item (meeting automation).
 pub(crate) fn stop_recording_from_app<R: Runtime>(app: &AppHandle<R>) {
     stop_recording_handler(app);
+}
+
+/// Fork: shows the main window, on the live transcript while recording.
+pub(crate) async fn show_live_transcript<R: Runtime>(app: &AppHandle<R>) {
+    focus_main_window(app);
+    if crate::audio::recording_commands::is_recording().await {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.eval("if (window.location.pathname !== '/') window.location.assign('/')");
+        }
+    }
 }
 
 fn check_updates_handler<R: Runtime>(app: &AppHandle<R>) {
@@ -352,7 +356,7 @@ fn build_menu<R: Runtime>(
         match state {
             RecordingState::Stopped => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("toggle_recording", format!("Start Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
+                    .item(&MenuItemBuilder::with_id("toggle_recording", format!("Start Recording{}", crate::meeting_automation::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Starting => {
                 builder = builder.item(
@@ -364,7 +368,7 @@ fn build_menu<R: Runtime>(
             RecordingState::Recording => {
                 builder = builder
                     .item(&MenuItemBuilder::with_id("pause_recording", "⏸ Pause Recording").build(app)?)
-                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_automation::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Pausing => {
                 builder = builder
@@ -373,7 +377,7 @@ fn build_menu<R: Runtime>(
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_automation::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Paused => {
                 builder = builder
@@ -381,7 +385,7 @@ fn build_menu<R: Runtime>(
                         &MenuItemBuilder::with_id("resume_recording", "▶ Resume Recording")
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_automation::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Resuming => {
                 builder = builder
@@ -390,7 +394,7 @@ fn build_menu<R: Runtime>(
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_detector::shortcut_hint(app))).build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", format!("⏹ Stop Recording{}", crate::meeting_automation::shortcut_hint(app))).build(app)?);
             }
             RecordingState::Stopping => {
                 builder = builder.item(
@@ -402,10 +406,14 @@ fn build_menu<R: Runtime>(
         }
     }
 
-    builder
+    builder = builder
         .item(&PredefinedMenuItem::separator(app)?)
-        .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
-        .item(&MenuItemBuilder::with_id("notion_jobs", "Resoconti Notion").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?);
+    // Fork: status of the after-meeting work, when any of it is turned on.
+    if crate::post_meeting::is_active(app) {
+        builder = builder.item(&MenuItemBuilder::with_id("post_meeting_jobs", "After-Meeting Status").build(app)?);
+    }
+    builder
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
         .item(&MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)

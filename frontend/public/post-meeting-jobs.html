@@ -1,0 +1,149 @@
+<!doctype html>
+<!-- Fork: "After the meeting" status window (src-tauri/src/post_meeting/jobs.rs). Plain HTML: no app layout. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meetily · After the meeting</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --line:#e5e7eb; --card:#f6f8fa;
+    --ok:#1a7f37; --err:#cf222e; --run:#0969da; --wait:#9a6700; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1e1f22; --fg:#e6e6e6; --muted:#9aa0a6; --line:#33363b;
+    --card:#26282c; --ok:#3fb950; --err:#f85149; --run:#58a6ff; --wait:#d29922; } }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:14px "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  .sub { color:var(--muted); font-size:12px; font-weight:normal; }
+  main { padding:8px 18px 18px; }
+  h2 { font-size:13px; margin:18px 18px 0; }
+  .health { margin:14px 18px 0; padding:12px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  .health h2 { margin:0 0 10px; }
+  .hrow { display:flex; gap:10px; font-size:13px; margin:4px 0; }
+  .hrow .dot { width:9px; height:9px; border-radius:50%; margin-top:5px; flex:0 0 auto; }
+  .hrow.ok .dot { background:var(--ok); } .hrow.ko .dot { background:var(--err); }
+  .hrow .n { width:200px; flex:0 0 auto; } .hrow .d { color:var(--muted); } .hrow.ko .d { color:var(--err); }
+  .row { display:flex; gap:12px; align-items:flex-start; padding:12px 0; border-bottom:1px solid var(--line); }
+  .badge { flex:0 0 auto; font-size:12px; font-weight:600; padding:3px 9px; border-radius:10px; background:var(--card); white-space:nowrap; }
+  .ok .badge { color:var(--ok); } .error .badge { color:var(--err); } .running .badge { color:var(--run); }
+  .wait .badge { color:var(--wait); } .skipped .badge { color:var(--muted); }
+  .info { flex:1; min-width:0; }
+  .title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .detail { font-size:12px; margin-top:4px; word-break:break-word; }
+  .error .detail { color:var(--err); }
+  .actions { display:flex; gap:6px; flex:0 0 auto; }
+  button { border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px; padding:5px 10px;
+    font:inherit; font-size:12px; cursor:pointer; }
+  button:hover { border-color:var(--muted); }
+  button.primary { background:#2383e2; border-color:#2383e2; color:#fff; }
+  .empty { color:var(--muted); padding:40px 0; text-align:center; }
+  .spin { display:inline-block; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>After the meeting</h1>
+  <span class="sub" id="updated"></span>
+  <button id="refresh">Refresh</button>
+</header>
+<section class="health">
+  <h2>Health check <span class="sub" id="checked"></span></h2>
+  <div id="health" class="sub">Runs every hour while the Notion agent is on.</div>
+  <button id="recheck">Check now</button>
+</section>
+<h2>Meetings</h2>
+<main id="list"><div class="empty">Loading…</div></main>
+<script>
+(function () {
+  function invoke(cmd, args) { return window.__TAURI_INTERNALS__.invoke(cmd, args || {}); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function fmt(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' }) + ' ' +
+      d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+  function inMinutes(iso) {
+    var m = Math.round((new Date(iso) - Date.now()) / 60000);
+    return m <= 0 ? 'shortly' : 'in ' + m + ' min';
+  }
+  var LABELS = {
+    ok: ['ok', 'Written in Notion'], done: ['ok', 'Done'], skipped: ['skipped', 'Skipped'], running: ['running', 'Working'],
+    queued: ['wait', 'Queued'], waiting: ['wait', 'Waiting'], retrying: ['error', 'Failed, retrying']
+  };
+  var list = document.getElementById('list');
+
+  function render(jobs) {
+    list.textContent = '';
+    if (!jobs.length) { list.appendChild(el('div', 'empty', 'No meetings to process in the last 7 days.')); return; }
+    jobs.forEach(function (j) {
+      var label = LABELS[j.state] || ['wait', j.state];
+      var row = el('div', 'row ' + label[0]);
+      var badge = el('span', 'badge', label[1]);
+      if (j.state === 'running') badge.prepend(el('span', 'spin', '↻'), ' ');
+      row.appendChild(badge);
+      var info = el('div', 'info');
+      info.appendChild(el('div', 'title', j.title || j.meetingId));
+      var meta = 'Meeting of ' + fmt(j.createdAt);
+      if (j.finished) meta += ' · finished ' + fmt(j.finished);
+      if (j.attempts) meta += ' · attempts: ' + j.attempts;
+      if (j.state === 'retrying' && j.nextAttempt) meta += ' · next ' + inMinutes(j.nextAttempt);
+      info.appendChild(el('div', 'meta', meta));
+      var detail = j.lastError || j.note || '';
+      if (j.state === 'ok' && j.tasksCreated != null) detail = j.tasksCreated + ' tasks created' + (j.note ? ' · ' + j.note : '');
+      if (detail) info.appendChild(el('div', 'detail', detail));
+      row.appendChild(info);
+      var actions = el('div', 'actions');
+      if (j.summaryUrl) {
+        var open = el('button', 'primary', 'Open in Notion');
+        open.onclick = function () { invoke('post_meeting_open_url', { url: j.summaryUrl }).catch(alert); };
+        actions.appendChild(open);
+      }
+      if (j.state !== 'running') {
+        var finished = j.state === 'ok' || j.state === 'done' || j.state === 'skipped';
+        var retry = el('button', '', finished ? 'Redo' : 'Retry now');
+        retry.title = finished ? 'Process this meeting again (the Notion page is updated, not duplicated)' : 'Process it now';
+        retry.onclick = function () {
+          if (finished && !confirm('Process this meeting again?')) return;
+          retry.disabled = true;
+          invoke('post_meeting_retry', { meetingId: j.meetingId }).then(load, function (e) { alert(e); retry.disabled = false; });
+        };
+        actions.appendChild(retry);
+      }
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+  function load() {
+    invoke('post_meeting_jobs').then(function (jobs) {
+      render(jobs);
+      document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+    }, function (e) { list.textContent = ''; list.appendChild(el('div', 'empty', 'Error: ' + e)); });
+  }
+
+  function renderHealth(report) {
+    if (!report.checks || !report.checks.length) return;
+    var box = document.getElementById('health');
+    box.textContent = ''; box.className = '';
+    report.checks.forEach(function (c) {
+      var row = el('div', 'hrow ' + (c.ok ? 'ok' : 'ko'));
+      row.appendChild(el('span', 'dot'));
+      row.appendChild(el('span', 'n', c.name));
+      row.appendChild(el('span', 'd', c.detail));
+      box.appendChild(row);
+    });
+    document.getElementById('checked').textContent = report.checkedAt ? '· checked ' + fmt(report.checkedAt) : '';
+  }
+  document.getElementById('refresh').onclick = load;
+  document.getElementById('recheck').onclick = function () {
+    var b = this; b.disabled = true; b.textContent = 'Checking… (up to 1 min)';
+    var done = function () { b.disabled = false; b.textContent = 'Check now'; };
+    invoke('health_run').then(function (r) { renderHealth(r); done(); }, done);
+  };
+  invoke('health_status').then(renderHealth);
+  setInterval(function () { invoke('health_status').then(renderHealth); }, 15000);
+  load(); setInterval(load, 5000);
+})();
+</script>
+</body>
+</html>
