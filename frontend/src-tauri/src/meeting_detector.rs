@@ -595,7 +595,7 @@ pub async fn auto_settings_set<R: Runtime>(app: AppHandle<R>, settings: AutoSett
     }
     config.second_pass_model = settings.second_pass_model.trim().chars().take(200).collect();
     let opinion = settings.second_opinion.trim();
-    if opinion.is_empty() || crate::second_opinion::is_safe_name(opinion) {
+    if crate::second_opinion::is_valid_setting(opinion) {
         config.second_opinion = opinion.to_string();
     }
     apply_autostart(config.start_with_windows);

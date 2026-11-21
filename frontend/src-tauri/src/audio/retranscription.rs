@@ -99,7 +99,16 @@ pub async fn start_retranscription<R: Runtime>(
     start_retranscription_with_alt(app, meeting_id, meeting_folder_path, language, model, provider, None).await
 }
 
-/// Fork: like `start_retranscription`, plus an optional CTC "second opinion" model run on the
+/// Fork: the "second opinion" model run on the same speech segments after the main one.
+#[derive(Debug, Clone)]
+pub enum AltModel {
+    /// NeMo CTC model folder (e.g. Italian FastConformer).
+    Ctc(PathBuf),
+    /// Any Parakeet model the main-model list offers (built-in or custom), by name.
+    Parakeet(String),
+}
+
+/// Fork: like `start_retranscription`, plus an optional "second opinion" model run on the
 /// same speech segments; its text goes to `transcripts.alt.json` (the DB keeps the main model).
 pub async fn start_retranscription_with_alt<R: Runtime>(
     app: AppHandle<R>,
@@ -108,7 +117,7 @@ pub async fn start_retranscription_with_alt<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
-    alt_model_dir: Option<PathBuf>,
+    alt_model: Option<AltModel>,
 ) -> Result<RetranscriptionResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = RetranscriptionGuard::acquire().map_err(|e| anyhow!(e))?;
@@ -117,7 +126,7 @@ pub async fn start_retranscription_with_alt<R: Runtime>(
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
     let use_parakeet = provider.as_deref() == Some("parakeet");
-    let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider, alt_model_dir).await;
+    let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider, alt_model).await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
     super::common::unload_engine_after_batch(use_parakeet).await;
@@ -191,7 +200,7 @@ async fn run_retranscription<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
-    alt_model_dir: Option<PathBuf>,
+    alt_model: Option<AltModel>,
 ) -> Result<RetranscriptionResult> {
     let folder_path = PathBuf::from(&meeting_folder_path);
     let audio_path = find_audio_file(&folder_path)?;
@@ -435,8 +444,8 @@ async fn run_retranscription<R: Runtime>(
     }
 
     // Fork: second opinion on the same segments (only those the main model transcribed).
-    let alt_texts: Option<Vec<String>> = match alt_model_dir {
-        Some(dir) if !all_transcripts.is_empty() => {
+    let alt_texts: Option<Vec<String>> = match alt_model {
+        Some(AltModel::Ctc(dir)) if !all_transcripts.is_empty() => {
             emit_progress(&app, &meeting_id, "transcribing", 80, "Second opinion model...");
             let indices = kept_segments.clone();
             let segments_for_alt = processable_segments;
@@ -454,17 +463,25 @@ async fn run_retranscription<R: Runtime>(
             })
             .await
             .map_err(|e| anyhow!("second opinion task: {}", e))?;
-            match outcome {
-                Ok(texts) => {
-                    info!("Second opinion: {} segments in {:.0}s", texts.len(), started.elapsed().as_secs_f64());
-                    Some(texts)
+            alt_outcome(outcome, started)?
+        }
+        Some(AltModel::Parakeet(name)) if !all_transcripts.is_empty() && use_parakeet => {
+            emit_progress(&app, &meeting_id, "transcribing", 80, "Second opinion model...");
+            let started = std::time::Instant::now();
+            let outcome: Result<Vec<String>> = async {
+                // Swaps the model in the shared engine (one model in memory at a time).
+                let engine = get_or_init_parakeet(&app, Some(&name)).await.map_err(|e| anyhow!("second opinion model: {}", e))?;
+                let mut texts = Vec::with_capacity(kept_segments.len());
+                for &i in &kept_segments {
+                    if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
+                        return Err(anyhow!("Retranscription cancelled"));
+                    }
+                    texts.push(engine.transcribe_audio(processable_segments[i].samples.clone()).await.unwrap_or_default());
                 }
-                Err(e) if e.to_string().contains("cancelled") => return Err(e),
-                Err(e) => {
-                    warn!("Second opinion skipped: {}", e);
-                    None
-                }
+                Ok(texts)
             }
+            .await;
+            alt_outcome(outcome, started)?
         }
         _ => None,
     };
@@ -694,6 +711,21 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
 }
 
 /// Get or initialize the Parakeet engine, auto-loading the model if needed
+/// Fork: a failed second opinion is skipped (the main transcript is enough); cancellation is not.
+fn alt_outcome(outcome: Result<Vec<String>>, started: std::time::Instant) -> Result<Option<Vec<String>>> {
+    match outcome {
+        Ok(texts) => {
+            info!("Second opinion: {} segments in {:.0}s", texts.len(), started.elapsed().as_secs_f64());
+            Ok(Some(texts))
+        }
+        Err(e) if e.to_string().contains("cancelled") => Err(e),
+        Err(e) => {
+            warn!("Second opinion skipped: {}", e);
+            Ok(None)
+        }
+    }
+}
+
 async fn get_or_init_parakeet<R: Runtime>(
     app: &AppHandle<R>,
     requested_model: Option<&str>,
