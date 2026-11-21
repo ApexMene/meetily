@@ -889,7 +889,7 @@ pub fn open_jobs_window<R: Runtime>(app: &AppHandle<R>) {
         return;
     }
     let built = tauri::WebviewWindowBuilder::new(app, JOBS_LABEL, tauri::WebviewUrl::App("notion-jobs.html".into()))
-        .title("Meetily · Resoconti e impostazioni")
+        .title("Meetily · Resoconti Notion")
         .inner_size(760.0, 640.0)
         .min_inner_size(520.0, 320.0)
         .center()

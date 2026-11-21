@@ -405,7 +405,7 @@ fn build_menu<R: Runtime>(
     builder
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
-        .item(&MenuItemBuilder::with_id("notion_jobs", "Resoconti e impostazioni").build(app)?)
+        .item(&MenuItemBuilder::with_id("notion_jobs", "Resoconti Notion").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
         .item(&MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
