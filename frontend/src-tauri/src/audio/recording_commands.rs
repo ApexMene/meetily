@@ -431,6 +431,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     app: AppHandle<R>,
     meeting_name: Option<String>,
 ) -> Result<(), String> {
+    // Fork: a new meeting has priority over the post-meeting re-transcription (same engine).
+    if super::retranscription::is_retranscription_in_progress() {
+        info!("Cancelling post-meeting re-transcription: a recording is starting");
+        super::retranscription::cancel_retranscription();
+    }
     info!(
         "Starting recording with default devices; meeting_name_configured={}",
         meeting_name.is_some()
@@ -657,6 +662,11 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     system_device_name: Option<String>,
     meeting_name: Option<String>,
 ) -> Result<(), String> {
+    // Fork: a new meeting has priority over the post-meeting re-transcription (same engine).
+    if super::retranscription::is_retranscription_in_progress() {
+        info!("Cancelling post-meeting re-transcription: a recording is starting");
+        super::retranscription::cancel_retranscription();
+    }
     info!(
         "Starting recording with specific devices; microphone_configured={}, system_audio_configured={}, meeting_name_configured={}",
         mic_device_name.is_some(),

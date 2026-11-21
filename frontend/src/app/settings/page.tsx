@@ -10,6 +10,7 @@ import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
+import { MeetingAutomationSettings, PostMeetingSettings } from '@/components/ForkSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
@@ -111,6 +112,7 @@ export default function SettingsPage() {
 
             <TabsContent value="general">
               <PreferenceSettings />
+              <div className="mt-6"><MeetingAutomationSettings /></div>
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />
@@ -120,6 +122,7 @@ export default function SettingsPage() {
                 transcriptModelConfig={transcriptModelConfig}
                 setTranscriptModelConfig={setTranscriptModelConfig}
               />
+              <PostMeetingSettings />
             </TabsContent>
             <TabsContent value="summaryModels">
               <SummaryModelSettings />

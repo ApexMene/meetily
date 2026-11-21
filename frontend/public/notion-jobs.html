@@ -1,0 +1,165 @@
+<!doctype html>
+<!-- Fork: "Resoconti Notion" window (notion_agent). Plain HTML: no app layout. -->
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Meetily · Resoconti e impostazioni</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --line:#e5e7eb; --card:#f6f8fa;
+    --ok:#1a7f37; --err:#cf222e; --run:#0969da; --wait:#9a6700; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1e1f22; --fg:#e6e6e6; --muted:#9aa0a6; --line:#33363b;
+    --card:#26282c; --ok:#3fb950; --err:#f85149; --run:#58a6ff; --wait:#d29922; } }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:14px "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  header .sub { color:var(--muted); font-size:12px; }
+  main { padding:8px 18px 18px; }
+  .row { display:flex; gap:12px; align-items:flex-start; padding:12px 0; border-bottom:1px solid var(--line); }
+  .badge { flex:0 0 auto; font-size:12px; font-weight:600; padding:3px 9px; border-radius:10px; background:var(--card); white-space:nowrap; }
+  .ok .badge { color:var(--ok); } .error .badge { color:var(--err); } .running .badge { color:var(--run); }
+  .wait .badge { color:var(--wait); } .skipped .badge { color:var(--muted); }
+  .info { flex:1; min-width:0; }
+  .title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .detail { font-size:12px; margin-top:4px; word-break:break-word; }
+  .error .detail { color:var(--err); }
+  .actions { display:flex; gap:6px; flex:0 0 auto; }
+  button { border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px; padding:5px 10px;
+    font:inherit; font-size:12px; cursor:pointer; }
+  button:hover { border-color:var(--muted); }
+  button.primary { background:#2383e2; border-color:#2383e2; color:#fff; }
+  .empty { color:var(--muted); padding:40px 0; text-align:center; }
+  .settings { margin:14px 18px 0; padding:12px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  .settings h2 { font-size:13px; margin:0 0 10px; }
+  .field { display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
+  .field label { width:230px; }
+  .field select, .field input { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .field .hint { color:var(--muted); font-size:12px; }
+  #sstatus { font-size:12px; margin-left:8px; }
+  h2.section { font-size:13px; margin:18px 18px 0; }
+  .hrow { display:flex; gap:10px; font-size:13px; margin:4px 0; }
+  .hrow .dot { width:9px; height:9px; border-radius:50%; margin-top:5px; flex:0 0 auto; }
+  .hrow.ok .dot { background:var(--ok); } .hrow.ko .dot { background:var(--err); }
+  .hrow .n { width:200px; flex:0 0 auto; } .hrow.ko .d { color:var(--err); } .hrow .d { color:var(--muted); }
+  .spin { display:inline-block; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  details.adv { margin:14px 0 6px; border:1px solid var(--line); border-radius:8px; padding:0 14px; background:var(--bg); }
+  details.adv summary { cursor:pointer; font-weight:600; padding:10px 0; }
+  details.adv[open] summary { border-bottom:1px solid var(--line); margin-bottom:8px; }
+  details.adv h3 { font-size:13px; margin:16px 0 4px; }
+  .intro, .help { color:var(--muted); font-size:12px; margin:6px 0; max-width:720px; line-height:1.45; }
+  .flow { display:flex; flex-wrap:wrap; gap:6px; list-style:none; padding:0; margin:6px 0 4px; }
+  .flow li { display:flex; align-items:center; gap:6px; font-size:12px; }
+  .flow li span { padding:4px 10px; border-radius:12px; background:var(--card); border:1px solid var(--line); }
+  .flow li.off span { opacity:.45; text-decoration:line-through; }
+  .flow li + li::before { content:"→"; color:var(--muted); }
+  .warn { color:var(--wait); font-size:12px; margin:2px 0 6px 240px; }
+  #opdl { display:flex; flex-wrap:wrap; gap:6px; }
+  .dirty { color:var(--wait) !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Resoconti Notion</h1>
+  <span class="sub" id="updated"></span>
+  <span class="sub">Impostazioni: Meetily › Settings › General e Transcription</span>
+  <button id="refresh">Aggiorna</button>
+</header>
+<section class="settings">
+  <h2>Stato sistema <span class="hint" id="hcheck" style="font-weight:normal;color:var(--muted)"></span></h2>
+  <div id="health"><span class="hint">Primo controllo tra poco dopo l'avvio...</span></div>
+  <div class="field"><button id="hrun">Ricontrolla ora</button></div>
+</section>
+<h2 class="section">Resoconti Notion</h2>
+<main id="list"><div class="empty">Caricamento...</div></main>
+<script>
+(function () {
+  function invoke(cmd, args) { return window.__TAURI_INTERNALS__.invoke(cmd, args || {}); }
+  var list = document.getElementById('list');
+  var LABELS = {
+    ok: ['ok', 'Scritto in Notion'], skipped: ['skipped', 'Saltato'], running: ['running', 'Claude sta scrivendo'],
+    queued: ['wait', 'In coda'], waiting: ['wait', 'In attesa'], retrying: ['error', 'Errore, riprovo'], error: ['error', 'Errore']
+  };
+  function fmt(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }) + ' ' +
+      d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  }
+  function inMinutes(iso) {
+    var m = Math.round((new Date(iso) - Date.now()) / 60000);
+    return m <= 0 ? 'a breve' : 'tra ' + m + ' min';
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function render(jobs) {
+    list.textContent = '';
+    if (!jobs.length) { list.appendChild(el('div', 'empty', 'Nessun meeting negli ultimi 7 giorni.')); return; }
+    jobs.forEach(function (j) {
+      var lab = LABELS[j.state] || ['wait', j.state];
+      var row = el('div', 'row ' + lab[0]);
+      var badge = el('span', 'badge', lab[1]);
+      if (j.state === 'running') { var s = el('span', 'spin', '↻'); badge.prepend(s, ' '); }
+      row.appendChild(badge);
+      var info = el('div', 'info');
+      info.appendChild(el('div', 'title', j.title || j.meeting_id));
+      var meta = 'Meeting del ' + fmt(j.created_at);
+      if (j.finished) meta += ' · finito ' + fmt(j.finished);
+      if (j.attempts) meta += ' · tentativi: ' + j.attempts;
+      if (j.state === 'retrying' && j.next_attempt) meta += ' · prossimo ' + inMinutes(j.next_attempt);
+      info.appendChild(el('div', 'meta', meta));
+      var detail = j.last_error || j.note || '';
+      if (j.state === 'ok' && j.tasks_created != null) detail = j.tasks_created + ' task create' + (j.note ? ' · ' + j.note : '');
+      if (detail) info.appendChild(el('div', 'detail', detail));
+      row.appendChild(info);
+      var actions = el('div', 'actions');
+      if (j.summary_url) {
+        var open = el('button', 'primary', 'Apri in Notion');
+        open.onclick = function () { invoke('notion_agent_open_url', { url: j.summary_url }); };
+        actions.appendChild(open);
+      }
+      if (j.state !== 'running') {
+        var retry = el('button', '', j.state === 'ok' ? 'Rifai' : 'Riprova ora');
+        retry.title = j.state === 'ok' ? 'Claude riscrive il resoconto (aggiorna la pagina esistente)' : 'Chiama Claude adesso';
+        retry.onclick = function () {
+          if (j.state === 'ok' && !confirm('Rifare il resoconto di questo meeting?')) return;
+          retry.disabled = true;
+          invoke('notion_agent_retry', { meetingId: j.meeting_id }).then(load, function (e) { alert(e); retry.disabled = false; });
+        };
+        actions.appendChild(retry);
+      }
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+  function load() {
+    invoke('notion_agent_jobs').then(function (jobs) {
+      render(jobs);
+      document.getElementById('updated').textContent = 'aggiornato ' + new Date().toLocaleTimeString('it-IT');
+    }, function (e) { list.textContent = ''; list.appendChild(el('div', 'empty', 'Errore: ' + e)); });
+  }
+  document.getElementById('refresh').onclick = load;
+  function renderHealth(r) {
+    var box = document.getElementById('health');
+    if (!r.checks || !r.checks.length) return;
+    box.textContent = '';
+    r.checks.forEach(function (c) {
+      var row = el('div', 'hrow ' + (c.ok ? 'ok' : 'ko'));
+      row.appendChild(el('span', 'dot'));
+      row.appendChild(el('span', 'n', c.name));
+      row.appendChild(el('span', 'd', c.detail));
+      box.appendChild(row);
+    });
+    document.getElementById('hcheck').textContent = r.checked_at ? '· controllato ' + fmt(r.checked_at) : '';
+  }
+  invoke('health_status').then(renderHealth);
+  setInterval(function () { invoke('health_status').then(renderHealth); }, 15000);
+  document.getElementById('hrun').onclick = function () {
+    var b = this; b.disabled = true; b.textContent = 'Controllo... (fino a 1 min)';
+    invoke('health_run').then(function (r) { renderHealth(r); b.disabled = false; b.textContent = 'Ricontrolla ora'; },
+      function () { b.disabled = false; b.textContent = 'Ricontrolla ora'; });
+  };
+  load(); setInterval(load, 5000);
+})();
+</script>
+</body>
+</html>

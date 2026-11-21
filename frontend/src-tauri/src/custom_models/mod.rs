@@ -19,6 +19,7 @@ mod paths;
 mod probe;
 mod registry;
 pub mod summary_hooks;
+pub mod second_opinion; // Fork: second-opinion CTC models for the post-meeting pass
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
