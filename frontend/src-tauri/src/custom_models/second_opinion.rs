@@ -25,7 +25,7 @@ const IT_COMMIT: &str = "e780cde1bcc30ce4ffffba310767cb90ea6ef62d";
 const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         name: "fastconformer-it",
-        label: "Italiano - NVIDIA FastConformer (457 MB, il più preciso)",
+        label: "Italian FastConformer (457 MB)",
         repo: IT_REPO,
         commit: IT_COMMIT,
         files: &[
@@ -36,7 +36,7 @@ const CATALOG: &[CatalogEntry] = &[
     },
     CatalogEntry {
         name: "fastconformer-it-int8",
-        label: "Italiano - NVIDIA FastConformer int8 (131 MB, più veloce)",
+        label: "Italian FastConformer int8 (131 MB, faster)",
         repo: IT_REPO,
         commit: IT_COMMIT,
         files: &[

@@ -30,7 +30,7 @@ const CARD = 'bg-white rounded-lg border border-gray-200 p-6 shadow-sm';
 function useAutoSettings() {
   const [settings, setSettings] = useState<AutoSettings | null>(null);
   useEffect(() => {
-    invoke<AutoSettings>('auto_settings_get').then(setSettings).catch((e) => toast.error('Impostazioni non leggibili', { description: String(e) }));
+    invoke<AutoSettings>('auto_settings_get').then(setSettings).catch((e) => toast.error('Could not load settings', { description: String(e) }));
   }, []);
   const save = useCallback(async (patch: Partial<AutoSettings>) => {
     const current = await invoke<AutoSettings>('auto_settings_get');
@@ -38,9 +38,9 @@ function useAutoSettings() {
     try {
       await invoke('auto_settings_set', { settings: next });
       setSettings(next);
-      toast.success('Impostazione salvata');
+      toast.success('Setting saved');
     } catch (e) {
-      toast.error('Non salvata', { description: String(e) });
+      toast.error('Not saved', { description: String(e) });
     }
   }, []);
   return { settings, save };
@@ -78,7 +78,7 @@ export function MeetingAutomationSettings() {
     if (e.altKey) parts.push('Alt');
     if (e.shiftKey) parts.push('Shift');
     if (e.metaKey) parts.push('Super');
-    if (!parts.length || (parts.length === 1 && parts[0] === 'Shift')) { toast.error('Usa almeno Ctrl o Alt'); return; }
+    if (!parts.length || (parts.length === 1 && parts[0] === 'Shift')) { toast.error('Use at least Ctrl or Alt'); return; }
     parts.push(e.code.replace(/^Key/, '').replace(/^Digit/, ''));
     const value = parts.join('+');
     setShortcut(value);
@@ -92,19 +92,19 @@ export function MeetingAutomationSettings() {
 
   return (
     <div className={CARD}>
-      <h3 className="text-lg font-semibold text-gray-900 mb-1">Meeting automatici</h3>
-      <p className="text-sm text-gray-600 mb-4">Meetily registra da solo quando Teams, Zoom o il browser usano il microfono.</p>
-      <Row title="Scorciatoia avvia/ferma registrazione" help="Clicca nel campo e premi i tasti. Canc per toglierla.">
-        <Input value={shortcut} readOnly onKeyDown={onShortcutKey} placeholder="nessuna" className="w-40 text-center font-mono" />
+      <h3 className="text-lg font-semibold text-gray-900 mb-1">Automatic Meetings</h3>
+      <p className="text-sm text-gray-600 mb-4">Meetily starts recording on its own when Teams, Zoom or a browser call uses the microphone.</p>
+      <Row title="Start/stop shortcut" help="Click the field and press the keys. Delete removes it.">
+        <Input value={shortcut} readOnly onKeyDown={onShortcutKey} placeholder="none" className="w-40 text-center font-mono" />
       </Row>
-      <Row title="Cancella l'audio dopo" help="Trascrizione e resoconto restano. 0 = mai.">
+      <Row title="Delete audio after" help="Transcripts and recaps are kept. 0 = never.">
         <div className="flex items-center gap-2">
           <Input type="number" min={0} max={3650} value={days} onChange={(e) => setDays(e.target.value)} onBlur={saveDays}
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} className="w-20 text-right" />
-          <span className="text-sm text-gray-600">giorni</span>
+          <span className="text-sm text-gray-600">days</span>
         </div>
       </Row>
-      <Row title="Avvia con Windows" help="Parte nascosta, con l'icona vicino all'orologio.">
+      <Row title="Start with Windows" help="Starts hidden, with the icon next to the clock.">
         <Switch checked={settings.start_with_windows} onCheckedChange={(v) => save({ start_with_windows: v })} />
       </Row>
     </div>
@@ -118,6 +118,7 @@ export function PostMeetingSettings() {
   const [parakeet, setParakeet] = useState<string[]>([]);
   const [opinions, setOpinions] = useState<OpinionModel[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [showMore, setShowMore] = useState(false);
 
   const loadOpinions = useCallback(() => invoke<OpinionModel[]>('second_opinion_list').then(setOpinions).catch(() => {}), []);
   useEffect(() => {
@@ -131,8 +132,8 @@ export function PostMeetingSettings() {
 
   const saveModels = async (patch: Partial<AgentModels>) => {
     const next = { ...models, ...patch };
-    try { await invoke('agent_models_set', { models: next }); setModels(next); toast.success('Impostazione salvata'); }
-    catch (e) { toast.error('Non salvata', { description: String(e) }); }
+    try { await invoke('agent_models_set', { models: next }); setModels(next); toast.success('Setting saved'); }
+    catch (e) { toast.error('Not saved', { description: String(e) }); }
   };
   const download = async (m: OpinionModel) => {
     setDownloading(m.name);
@@ -141,7 +142,7 @@ export function PostMeetingSettings() {
       await loadOpinions();
       await save({ second_opinion: m.name });
     } catch (e) {
-      toast.error('Download non riuscito', { description: String(e) });
+      toast.error('Download failed', { description: String(e) });
     } finally { setDownloading(null); }
   };
 
@@ -154,18 +155,18 @@ export function PostMeetingSettings() {
   const name = (m: string) => ({ haiku: 'Claude Haiku', sonnet: 'Claude Sonnet', opus: 'Claude Opus' } as Record<string, string>)[m] || m;
   const opinionLabel = installed.find((m) => m.name === settings.second_opinion)?.label;
   const steps: [string, boolean][] = [
-    ['Testo scritto durante il meeting', true],
-    ['Ritrascrizione con ' + (settings.second_pass_model || 'il modello migliore') + (opinionLabel ? ' + ' + short(opinionLabel) : ''), on],
-    [name(models.clean_model) + ' sistema il testo', claude],
-    [name(models.recap_model) + ' scrive resoconto e task in Notion', true],
+    ['Live transcript', true],
+    ['Re-transcribe: ' + (settings.second_pass_model ? short(settings.second_pass_model) : 'best model') + (opinionLabel ? ' + ' + short(opinionLabel) : ''), on],
+    [name(models.clean_model) + ' cleans up the text', claude],
+    [name(models.recap_model) + ' writes recap and tasks in Notion', true],
   ];
 
   return (
     <div className={CARD + ' mt-6'}>
-      <h3 className="text-lg font-semibold text-gray-900 mb-1">Dopo il meeting</h3>
+      <h3 className="text-lg font-semibold text-gray-900 mb-1">After the Meeting</h3>
       <p className="text-sm text-gray-600">
-        Durante il meeting il testo viene scritto al volo. A fine meeting Meetily può riascoltare la registrazione con più calma
-        e ottenere un testo molto più pulito, in sottofondo: circa 10-20 minuti per ogni ora di meeting.
+        The live transcript is written on the fly. When the meeting ends, Meetily can transcribe the whole recording again
+        in the background for a much cleaner text: about 10-20 minutes per hour of meeting.
       </p>
 
       <ol className="flex flex-wrap items-center gap-2 my-5">
@@ -177,81 +178,86 @@ export function PostMeetingSettings() {
         ))}
       </ol>
 
-      <Row title="Ritrascrivere a fine meeting">
+      <Row title="Re-transcribe when the meeting ends">
         <Select value={mode} onValueChange={(v) => save({ second_pass: v })}>
           <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="off">No, tieni il testo del meeting</SelectItem>
-            <SelectItem value="model">Sì, solo con i modelli qui sotto</SelectItem>
-            <SelectItem value="full">Sì, e poi Claude sistema il testo (consigliato)</SelectItem>
+            <SelectItem value="off">No, keep the live transcript</SelectItem>
+            <SelectItem value="model">Yes, with the models below</SelectItem>
+            <SelectItem value="full">Yes, then Claude cleans it up (recommended)</SelectItem>
           </SelectContent>
         </Select>
       </Row>
 
       {on && (
         <>
-          <Row title="Modello principale" help="Automatico sceglie Parakeet ultra, se è tra i modelli personalizzati qui sopra.">
+          <Row title="Main model" help="Automatic picks Parakeet ultra when it is among the custom models above.">
             <Select value={settings.second_pass_model || AUTO} onValueChange={(v) => save({ second_pass_model: v === AUTO ? '' : v })}>
               <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value={AUTO}>Automatico (il migliore installato)</SelectItem>
+                <SelectItem value={AUTO}>Automatic (best installed)</SelectItem>
                 {parakeet.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                 {settings.second_pass_model && !parakeet.includes(settings.second_pass_model) &&
-                  <SelectItem value={settings.second_pass_model}>{settings.second_pass_model} (non trovato)</SelectItem>}
+                  <SelectItem value={settings.second_pass_model}>{settings.second_pass_model} (not found)</SelectItem>}
               </SelectContent>
             </Select>
           </Row>
-          <Row title="Secondo modello" help="Facoltativo. Specializzato nella lingua del meeting; Claude unisce i due testi.">
+          <Row title="Second model" help="Optional. Specialised in the meeting language; Claude merges the two readings.">
             <Select value={settings.second_opinion || NONE} onValueChange={(v) => save({ second_opinion: v === NONE ? '' : v })}>
               <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value={NONE}>Nessuno</SelectItem>
+                <SelectItem value={NONE}>None</SelectItem>
                 {installed.map((m) => <SelectItem key={m.name} value={m.name}>{m.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </Row>
-          {missing.length > 0 && (
+          {missing.length > 0 && installed.length > 0 && !showMore && (
+            <div className="flex justify-end pb-4 -mt-2">
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => setShowMore(true)}>Other models…</button>
+            </div>
+          )}
+          {missing.length > 0 && (installed.length === 0 || showMore) && (
             <div className="flex flex-wrap justify-end gap-2 pb-4">
               {missing.map((m) => (
                 <Button key={m.name} variant="outline" size="sm" disabled={!!downloading} onClick={() => download(m)}>
                   {downloading === m.name ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  {downloading === m.name ? 'Download in corso…' : 'Scarica ' + m.label}
+                  {downloading === m.name ? 'Downloading…' : 'Download ' + m.label}
                 </Button>
               ))}
             </div>
           )}
           {!claude && settings.second_opinion && (
             <div className="p-3 mb-4 rounded-md border border-yellow-200 bg-yellow-50 text-sm text-yellow-800">
-              Il secondo modello serve solo se poi Claude sistema il testo: scegli “Sì, e poi Claude sistema il testo”.
+              The second model is only used when Claude cleans up the text: choose “Yes, then Claude cleans it up”.
             </div>
           )}
         </>
       )}
 
       {claude && (
-        <Row title="Chi sistema il testo" help="Lavoro meccanico: Haiku basta ed è il più veloce.">
+        <Row title="Text clean-up" help="Mechanical work: Haiku is enough and the fastest.">
           <Select value={models.clean_model} onValueChange={(v) => saveModels({ clean_model: v })}>
             <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="haiku">Claude Haiku (consigliato)</SelectItem>
+              <SelectItem value="haiku">Claude Haiku (recommended)</SelectItem>
               <SelectItem value="sonnet">Claude Sonnet</SelectItem>
             </SelectContent>
           </Select>
         </Row>
       )}
-      <Row title="Chi scrive resoconto e task in Notion">
+      <Row title="Recap and tasks in Notion">
         <Select value={models.recap_model} onValueChange={(v) => saveModels({ recap_model: v })}>
           <SelectTrigger className="w-80"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="sonnet">Claude Sonnet (consigliato)</SelectItem>
-            <SelectItem value="opus">Claude Opus (più accurato, più lento)</SelectItem>
-            <SelectItem value="haiku">Claude Haiku (più veloce)</SelectItem>
+            <SelectItem value="sonnet">Claude Sonnet (recommended)</SelectItem>
+            <SelectItem value="opus">Claude Opus (most accurate, slower)</SelectItem>
+            <SelectItem value="haiku">Claude Haiku (fastest)</SelectItem>
           </SelectContent>
         </Select>
       </Row>
-      <Row title="Istruzioni per Claude" help={<>Due file di testo: <code>transcript-cleanup.md</code> e <code>meeting-to-notion.md</code>.</>}>
+      <Row title="Instructions for Claude" help={<>Two editable text files: <code>transcript-cleanup.md</code> and <code>meeting-to-notion.md</code>.</>}>
         <Button variant="outline" size="sm" onClick={() => invoke('prompts_open_folder')}>
-          <FolderOpen className="w-4 h-4" />Apri cartella
+          <FolderOpen className="w-4 h-4" />Open folder
         </Button>
       </Row>
     </div>
