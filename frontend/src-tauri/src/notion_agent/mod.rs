@@ -1107,6 +1107,39 @@ fn load_alt_texts(folder: &Path) -> std::collections::HashMap<i64, String> {
         })
         .collect()
 }
+/// Speaker source tags ("mic" | "system") from live `transcripts.json` (or backup), as (start_s, end_s, source).
+fn load_speaker_sources(folder: &Path) -> Vec<(f64, f64, String)> {
+    for name in ["transcripts.live.json", "transcripts.json"] {
+        let Ok(bytes) = std::fs::read(folder.join(name)) else { continue };
+        let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+        let Some(segs) = val.get("segments").and_then(|s| s.as_array()) else { continue };
+        let out: Vec<(f64, f64, String)> = segs
+            .iter()
+            .filter_map(|s| {
+                let src = s.get("speaker_source")?.as_str()?.trim().to_string();
+                if src != "mic" && src != "system" {
+                    return None;
+                }
+                let start = s.get("audio_start_time")?.as_f64()?;
+                let end = s.get("audio_end_time").and_then(|v| v.as_f64()).unwrap_or(start + 2.0);
+                Some((start, end, src))
+            })
+            .collect();
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    Vec::new()
+}
+
+fn find_speaker_source(sources: &[(f64, f64, String)], start: Option<f64>) -> Option<String> {
+    let t = start?;
+    sources
+        .iter()
+        .find(|(s, e, _)| t >= *s - 1.0 && t <= *e + 1.0)
+        .map(|(_, _, src)| src.clone())
+}
+
 const CLEAN_CHUNK: usize = 60;
 
 /// Claude pass over the re-transcribed segments (merging the second opinion when present).
@@ -1115,17 +1148,19 @@ async fn clean_transcript<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePoo
     let base = base_dir(app).ok_or("no app data dir")?;
     let prompt = load_clean_prompt(&base);
     let alt = load_alt_texts(folder);
+    let sources = load_speaker_sources(folder);
     let rows = sqlx::query("SELECT id, transcript, audio_start_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
         .bind(meeting_id)
         .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
-    let segments: Vec<(String, String, Option<String>)> = rows
+    let segments: Vec<(String, String, Option<String>, Option<String>)> = rows
         .iter()
         .map(|r| {
             let start = r.try_get::<Option<f64>, _>("audio_start_time").ok().flatten();
             let b = start.and_then(|s| alt.get(&((s * 1000.0).round() as i64)).cloned());
-            (r.try_get::<String, _>("id").unwrap_or_default(), r.try_get::<String, _>("transcript").unwrap_or_default(), b)
+            let src = find_speaker_source(&sources, start);
+            (r.try_get::<String, _>("id").unwrap_or_default(), r.try_get::<String, _>("transcript").unwrap_or_default(), b, src)
         })
         .collect();
     if segments.is_empty() {
@@ -1135,10 +1170,15 @@ async fn clean_transcript<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePoo
     let mut updates: Vec<(String, Option<String>)> = Vec::new(); // None = drop
     for chunk in segments.chunks(CLEAN_CHUNK) {
         let mut stdin = format!("{}\n\nSEGMENTS\n", prompt);
-        for (n, (_, text, b)) in chunk.iter().enumerate() {
+        for (n, (_, text, b, src)) in chunk.iter().enumerate() {
+            let tag = match src.as_deref() {
+                Some("mic") => "[mic] ",
+                Some("system") => "[system] ",
+                _ => "",
+            };
             match b {
-                Some(b) if b != text => stdin.push_str(&format!("{}. A: {} | B: {}\n", n + 1, text.replace('\n', " "), b.replace('\n', " "))),
-                _ => stdin.push_str(&format!("{}. {}\n", n + 1, text.replace('\n', " "))),
+                Some(b) if b != text => stdin.push_str(&format!("{}. {}A: {} | B: {}\n", n + 1, tag, text.replace('\n', " "), b.replace('\n', " "))),
+                _ => stdin.push_str(&format!("{}. {}{}\n", n + 1, tag, text.replace('\n', " "))),
             }
         }
         let model = if config.clean_model.trim().is_empty() { "haiku" } else { config.clean_model.trim() };
@@ -1151,7 +1191,7 @@ async fn clean_transcript<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePoo
         };
         match parse_clean_answer(&answer, chunk.len()) {
             Some(lines) => {
-                for ((id, original, _), line) in chunk.iter().zip(lines) {
+                for ((id, original, _, _), line) in chunk.iter().zip(lines) {
                     match line {
                         None => updates.push((id.clone(), None)),
                         Some(text) if text != *original => updates.push((id.clone(), Some(text))),
