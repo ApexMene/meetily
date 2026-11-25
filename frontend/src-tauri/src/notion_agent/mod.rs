@@ -1077,8 +1077,9 @@ and names of A. If B is nonsense, ignore it.
 For EACH segment write the most likely version of what was actually said:
 - keep the language the meeting is held in; fix only obvious errors (garbled words, wrong language);
 - keep technical terms, names and numbers; do not invent, summarize or add content;
+- identify who is speaking when clear from turn-taking or names/roles mentioned in the conversation, prefixing the text with `[Name]` (or `[Speaker 1]`, `[Speaker 2]` when the name is unknown, keeping labels consistent across the chunk); omit the tag only if completely ambiguous;
 - if the segment is noise or meaningless write exactly: [noise]
-Output: one line per segment, same order, format \"n. text\". Nothing else.
+Output: one line per segment, same order, format \"n. [Speaker] text\" (or \"n. text\" if unknown). Nothing else.
 ";
 const CLEAN_PROMPT_FILE: &str = "transcript-cleanup.md";
 
