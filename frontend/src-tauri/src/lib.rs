@@ -914,6 +914,7 @@ pub fn run() {
             api::api_get_transcript_api_key,
             api::api_delete_meeting,
             api::api_merge_meetings,
+            audio::trim::api_trim_meeting,
             api::api_get_meeting,
             api::api_get_meeting_metadata,
             api::api_get_meeting_transcripts,
