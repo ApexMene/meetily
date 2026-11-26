@@ -105,6 +105,9 @@ const Sidebar: React.FC = () => {
   // }, [settingsSaveSuccess]);
 
 
+  // Fork: Ctrl/Cmd+click selects meetings to merge.
+  const [mergeSelection, setMergeSelection] = useState<string[]>([]);
+  const [isMerging, setIsMerging] = useState(false);
   const [deleteModalState, setDeleteModalState] = useState<{ isOpen: boolean; itemId: string | null }>({ isOpen: false, itemId: null });
 
   useEffect(() => {
@@ -356,6 +359,28 @@ const Sidebar: React.FC = () => {
     }
   };
 
+  const handleMerge = async () => {
+    if (mergeSelection.length < 2) return;
+    setIsMerging(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const titles = mergeSelection.map(id => meetings.find((m: CurrentMeeting) => m.id === id)?.title || '');
+      const newId = await invoke<string>('api_merge_meetings', {
+        meetingIds: mergeSelection,
+        title: `Merged: ${titles.filter(Boolean).join(' + ')}`.slice(0, 200),
+      });
+      setMergeSelection([]);
+      const list = await invoke<CurrentMeeting[]>('api_get_meetings');
+      setMeetings(list);
+      toast.success('Meetings merged', { description: 'The original meetings are unchanged' });
+      router.push(`/meeting-details?id=${newId}`);
+    } catch (error) {
+      toast.error('Could not merge meetings', { description: String(error) });
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
   const handleDeleteConfirm = () => {
     if (deleteModalState.itemId) {
       handleDelete(deleteModalState.itemId);
@@ -570,12 +595,16 @@ const Sidebar: React.FC = () => {
         <div
           className={`flex items-center transition-all duration-150 group ${item.type === 'folder' && depth === 0
             ? 'p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg'
-            : `px-3 py-2 my-0.5 rounded-md text-sm ${isActive ? 'bg-blue-100 text-blue-700 font-medium' :
+            : `px-3 py-2 my-0.5 rounded-md text-sm ${mergeSelection.includes(item.id) ? 'bg-gray-100 ring-1 ring-gray-300' : isActive ? 'bg-blue-100 text-blue-700 font-medium' :
               hasTranscriptMatch ? 'bg-yellow-50' : 'hover:bg-gray-50'
             } cursor-pointer`
             }`}
           style={item.type === 'folder' && depth === 0 ? {} : { paddingLeft }}
-          onClick={() => {
+          onClick={(e) => {
+            if (isMeetingItem && (e.ctrlKey || e.metaKey)) {
+              setMergeSelection(sel => sel.includes(item.id) ? sel.filter(x => x !== item.id) : [...sel, item.id]);
+              return;
+            }
             if (item.type === 'folder') {
               toggleFolder(item.id);
             } else {
@@ -764,6 +793,18 @@ const Sidebar: React.FC = () => {
                   .filter(item => item.type === 'folder' && expandedFolders.has(item.id) && item.children)
                   .map(item => (
                     <div key={`${item.id}-children`} className="mx-3">
+                      {item.id === 'meetings' && mergeSelection.length > 0 && (
+                        <div className="flex items-center gap-2 mx-3 my-1 px-3 py-2 text-sm text-gray-600 border-b border-gray-200">
+                          <span className="flex-1">{mergeSelection.length} selected</span>
+                          <button className="text-gray-500 hover:text-gray-800" onClick={() => setMergeSelection([])}>Cancel</button>
+                          <button
+                            className="font-medium text-blue-700 hover:text-blue-900 disabled:text-gray-400"
+                            disabled={mergeSelection.length < 2 || isMerging}
+                            title={mergeSelection.length < 2 ? 'Ctrl+click at least two meetings' : undefined}
+                            onClick={handleMerge}
+                          >{isMerging ? 'Merging…' : 'Merge'}</button>
+                        </div>
+                      )}
                       {item.children!.map(child => renderItem(child, 1))}
                     </div>
                   ))}

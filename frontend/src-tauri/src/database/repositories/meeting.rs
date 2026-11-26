@@ -47,6 +47,74 @@ impl MeetingsRepository {
         }
     }
 
+    /// Fork: merge several meetings into a new one. Transcripts are copied in the order of the
+    /// source meetings (oldest first), each block opened by a line with the source title. The
+    /// sources are left untouched; the new meeting has no audio folder.
+    pub async fn merge_meetings(pool: &SqlitePool, meeting_ids: &[String], title: &str) -> Result<String, SqlxError> {
+        if meeting_ids.len() < 2 {
+            return Err(SqlxError::Protocol("at least two meetings are needed".to_string()));
+        }
+        let mut conn = pool.acquire().await?;
+        let mut tx = conn.begin().await?;
+
+        let mut sources: Vec<(String, String, String)> = Vec::new();
+        for id in meeting_ids {
+            let row: Option<(String, String, String)> =
+                sqlx::query_as("SELECT id, title, created_at FROM meetings WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            match row {
+                Some(r) => sources.push(r),
+                None => {
+                    tx.rollback().await?;
+                    return Err(SqlxError::RowNotFound);
+                }
+            }
+        }
+        sources.sort_by(|a, b| a.2.cmp(&b.2));
+
+        let new_id = format!("meeting-{}", uuid::Uuid::new_v4());
+        let now = Utc::now();
+        sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES (?, ?, ?, ?, NULL)")
+            .bind(&new_id)
+            .bind(title)
+            .bind(&sources[0].2)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+
+        for (src_id, src_title, src_created) in &sources {
+            sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript, timestamp) VALUES (?, ?, ?, ?)")
+                .bind(format!("transcript-{}", uuid::Uuid::new_v4()))
+                .bind(&new_id)
+                .bind(format!("--- {} ---", src_title))
+                .bind(src_created)
+                .execute(&mut *tx)
+                .await?;
+            let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                "SELECT transcript, timestamp, speaker FROM transcripts WHERE meeting_id = ? \
+                 ORDER BY COALESCE(audio_start_time, 0), timestamp",
+            )
+            .bind(src_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            for (text, ts, speaker) in rows {
+                sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker) VALUES (?, ?, ?, ?, ?)")
+                    .bind(format!("transcript-{}", uuid::Uuid::new_v4()))
+                    .bind(&new_id)
+                    .bind(text)
+                    .bind(ts)
+                    .bind(speaker)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        info!("Merged {} meetings into {}", sources.len(), new_id);
+        Ok(new_id)
+    }
+
     pub async fn get_meeting(
         pool: &SqlitePool,
         meeting_id: &str,
