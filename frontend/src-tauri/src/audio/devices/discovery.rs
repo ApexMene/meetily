@@ -8,7 +8,7 @@ use super::platform;
 /// List all available audio devices on the system
 pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     info!("🎙️ list_audio_devices: start");
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let host = cpal::default_host();
 
     // Platform-specific device enumeration
@@ -16,7 +16,10 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = {
         #[cfg(target_os = "windows")]
         {
-            platform::configure_windows_audio(&host)?
+            // Fork: serialize WASAPI enumeration on a single dedicated OS thread to avoid
+            // COM apartment / WASAPI races when polled from Tokio worker threads
+            // while active capture streams (e.g. Bluetooth headsets) are running.
+            windows_device_query().await?
         }
 
         #[cfg(target_os = "linux")]
@@ -38,10 +41,12 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     //
     // On Linux this is intentionally disabled: configure_linux_audio() already
     // provides every useful device (PulseAudio/PipeWire sources and sinks, or a
-    // filtered ALSA fallback). This block would otherwise re-inject all raw ALSA
-    // PCM names as Output devices, polluting the "System Audio" picker with
-    // entries like hdmi:, front:, sysdefault:, etc.
-    #[cfg(not(target_os = "linux"))]
+    // filtered ALSA fallback).
+    // Fork: on Windows this is also disabled: configure_windows_audio() already
+    // enumerates all WASAPI input and output devices on the dedicated COM thread;
+    // calling host.devices() again on a Tokio worker thread is redundant and risks
+    // WASAPI/COM instability during active recording.
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         use super::configuration::DeviceType;
 
@@ -195,6 +200,43 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
     })
     .await
     .map_err(|e| anyhow::anyhow!("Microphone verification task failed: {}", e))?
+}
+
+/// Fork: every WASAPI enumeration runs on one dedicated thread; a panic becomes an error.
+#[cfg(target_os = "windows")]
+async fn windows_device_query() -> Result<Vec<AudioDevice>> {
+    use std::sync::{mpsc, OnceLock};
+    use tokio::sync::oneshot;
+
+    type Req = oneshot::Sender<Result<Vec<AudioDevice>>>;
+    static WORKER: OnceLock<mpsc::Sender<Req>> = OnceLock::new();
+
+    let tx = WORKER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Req>();
+        let _ = std::thread::Builder::new()
+            .name("wasapi-device-enum".to_string())
+            .spawn(move || {
+                while let Ok(reply) = rx.recv() {
+                    let res = std::panic::catch_unwind(|| {
+                        let host = cpal::default_host();
+                        platform::configure_windows_audio(&host)
+                    });
+                    let out = match res {
+                        Ok(r) => r,
+                        Err(_) => Err(anyhow::anyhow!("WASAPI device enumeration panicked")),
+                    };
+                    let _ = reply.send(out);
+                }
+            });
+        tx
+    });
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.send(reply_tx)
+        .map_err(|_| anyhow::anyhow!("WASAPI device enumeration worker stopped"))?;
+    reply_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("WASAPI device enumeration worker dropped reply"))?
 }
 
 #[cfg(target_os = "linux")]

@@ -285,7 +285,8 @@ impl AudioDeviceMonitor {
         device_update_mailbox: Arc<std::sync::Mutex<Option<(String, Option<String>)>>>,
     ) {
         let mut last_device_list = Vec::new();
-        let check_interval = Duration::from_secs(2); // Poll every 2 seconds
+        // Fork: the interval below was computed but never applied (always 2s).
+        let mut check_interval = Duration::from_secs(5); // Poll every 5s initially, then 10s when stable
 
         #[cfg(target_os = "macos")]
         let _listener_guard = register_device_change_listeners(device_change_notify.clone());
@@ -415,13 +416,14 @@ impl AudioDeviceMonitor {
             // If any device is missing, check more frequently
             let has_missing = monitored_devices.iter().any(|d| d.consecutive_missing > 0);
             let next_interval = if has_missing {
-                Duration::from_secs(2) // Fast polling when device missing
+                Duration::from_secs(3) // Fast polling when device missing
             } else {
-                Duration::from_secs(5) // Slower polling when all devices present
+                Duration::from_secs(10) // Slower polling when all devices present
             };
 
             if next_interval != check_interval {
                 debug!("Adjusting monitor interval to {:?}", next_interval);
+                check_interval = next_interval;
             }
         }
     }
