@@ -803,6 +803,20 @@ pub async fn api_delete_meeting<R: Runtime>(
     }
 }
 
+/// Fork: merge two or more meetings into a new one (sources are kept).
+#[tauri::command]
+pub async fn api_merge_meetings<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_ids: Vec<String>,
+    title: String,
+) -> Result<String, String> {
+    let title = if title.trim().is_empty() { "Merged meeting".to_string() } else { title.trim().to_string() };
+    MeetingsRepository::merge_meetings(state.db_manager.pool(), &meeting_ids, &title)
+        .await
+        .map_err(|e| format!("Failed to merge meetings: {}", e))
+}
+
 #[tauri::command]
 pub async fn api_get_meeting<R: Runtime>(
     _app: AppHandle<R>,
