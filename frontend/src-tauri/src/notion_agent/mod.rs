@@ -336,7 +336,7 @@ fn utc(time: DateTime<Utc>) -> String {
 }
 
 async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool, timezone: Option<String>) -> Result<MeetingInput, String> {
-    let meeting = sqlx::query("SELECT title, created_at FROM meetings WHERE id = ?")
+    let meeting = sqlx::query("SELECT title, created_at, folder_path FROM meetings WHERE id = ?")
         .bind(meeting_id)
         .fetch_optional(pool)
         .await
@@ -345,6 +345,8 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
     let title: String = meeting.try_get("title").unwrap_or_default();
     let created: String = meeting.try_get("created_at").unwrap_or_default();
     let saved = DateTime::parse_from_rfc3339(&created).map_err(|error| error.to_string())?.with_timezone(&Utc);
+    let folder: Option<String> = meeting.try_get("folder_path").ok().flatten();
+    let runs = folder.map(|folder| crate::speakers::load(Path::new(&folder))).unwrap_or_default();
 
     let rows = sqlx::query(
         "SELECT transcript, timestamp, audio_start_time, audio_end_time FROM transcripts \
@@ -368,19 +370,26 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
         if text.trim().is_empty() {
             continue;
         }
-        let label = match row.try_get::<Option<f64>, _>("audio_start_time").ok().flatten() {
+        let offset = row.try_get::<Option<f64>, _>("audio_start_time").ok().flatten();
+        let end = row.try_get::<Option<f64>, _>("audio_end_time").ok().flatten();
+        let tag = offset
+            .zip(end)
+            .and_then(|(offset, end)| crate::speakers::dominant(&runs, offset, end))
+            .map(|source| format!("{} ", source.tag()))
+            .unwrap_or_default();
+        let label = match offset {
             Some(offset) => (start + ChronoDuration::milliseconds((offset * 1000.0) as i64))
                 .with_timezone(&Local)
                 .format("%H:%M:%S")
                 .to_string(),
             None => row.try_get::<String, _>("timestamp").unwrap_or_default(),
         };
-        transcript.push_str(&format!("[{}] {}\n", label, text.trim()));
+        transcript.push_str(&format!("[{}] {}{}\n", label, tag, text.trim()));
     }
 
     let (calendar_start, calendar_end) = calendar_slot(start, saved);
     let local_start = start.with_timezone(&Local);
-    let meta = serde_json::json!({
+    let mut meta = serde_json::json!({
         "meetily_id": meeting_id,
         "title": title,
         "start_utc": utc(start),
@@ -398,6 +407,9 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
         "timezone": timezone.unwrap_or_else(|| local_start.format("UTC%:z").to_string()),
         "test_mode": test_mode,
     });
+    if !runs.is_empty() {
+        meta["speaker_tags"] = crate::speakers::TAGS_HELP.into();
+    }
     Ok(MeetingInput { meta, transcript, saved, seconds })
 }
 

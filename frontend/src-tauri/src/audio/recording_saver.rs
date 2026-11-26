@@ -363,6 +363,11 @@ impl RecordingSaver {
         // Give time for final chunks
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
+        // Fork: microphone/system timeline next to the transcript
+        if let Some(folder) = &self.meeting_folder {
+            crate::speakers::save(folder);
+        }
+
         // Check if incremental saver exists (indicates auto_save was enabled)
         let should_save_audio = self.incremental_saver.is_some();
 

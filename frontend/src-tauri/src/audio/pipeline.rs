@@ -1002,6 +1002,8 @@ impl AudioPipeline {
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
     ) -> Result<Self> {
+        crate::speakers::start(sample_rate); // Fork: microphone/system timeline of this recording
+
         // Log device characteristics for adaptive buffering
         info!("🎛️ AudioPipeline initializing with device characteristics:");
         info!("   Mic: '{}' ({:?}) - Buffer: {:?}",
@@ -1128,6 +1130,7 @@ impl AudioPipeline {
     }
 
     fn emit_mixed_window(&mut self, mic_window: &[f32], sys_window: &[f32], timestamp: f64) {
+        crate::speakers::record(mic_window, sys_window); // Fork: who speaks, before mixing
         // Simple mixing without aggressive ducking
         let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
 

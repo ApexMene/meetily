@@ -1,9 +1,11 @@
 //! Claude clean-up of the re-transcribed segments: drops the noise speech models invent on
 //! silence, fixes obvious mistakes and merges the second model's reading
-//! (`transcripts.alt.json`), without adding content. The prompt is editable in
+//! (`transcripts.alt.json`), without adding content. Segments carry the microphone/system hint
+//! from `speakers.json` when the recording has one. The prompt is editable in
 //! `<app data>/post-meeting/transcript-cleanup.md`.
 
 use crate::claude_code::{Request, Tools};
+use crate::speakers::{self, Source};
 use sqlx::Row;
 use std::collections::HashMap;
 use std::path::Path;
@@ -72,6 +74,7 @@ struct Segment {
     id: String,
     text: String,
     alt: Option<String>,
+    source: Option<Source>,
 }
 
 /// Cleans the transcript of a meeting. Returns (kept, dropped) segments. A chunk Claude fails on
@@ -80,7 +83,8 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, model:
     let dir = super::data_dir(app).ok_or("app data directory unavailable")?;
     let prompt = load_prompt(&dir);
     let alt = load_alt_texts(folder);
-    let rows = sqlx::query("SELECT id, transcript, audio_start_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+    let runs = speakers::load(folder);
+    let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
         .bind(meeting_id)
         .fetch_all(pool)
         .await
@@ -89,10 +93,12 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, model:
         .iter()
         .map(|row| {
             let start = row.try_get::<Option<f64>, _>("audio_start_time").ok().flatten();
+            let end = row.try_get::<Option<f64>, _>("audio_end_time").ok().flatten();
             Segment {
                 id: row.try_get("id").unwrap_or_default(),
                 text: row.try_get("transcript").unwrap_or_default(),
                 alt: start.and_then(|start| alt.get(&millis(start)).cloned()),
+                source: start.zip(end).and_then(|(start, end)| speakers::dominant(&runs, start, end)),
             }
         })
         .collect();
@@ -139,14 +145,20 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, model:
     Ok((segments.len() - dropped, dropped))
 }
 
-/// "SEGMENTS" block: `n. text`, or `n. A: text | B: text` when the second model differs.
+/// "SEGMENTS" block: `n. text`, or `n. A: text | B: text` when the second model differs, with the
+/// `[mic]`/`[system]` hint in front when known (explained once, never to be copied).
 fn numbered(chunk: &[Segment]) -> String {
-    let mut out = String::from("SEGMENTS\n");
+    let mut out = String::new();
+    if chunk.iter().any(|segment| segment.source.is_some()) {
+        out.push_str(&format!("Speaker hints: {} Use them to tell turns apart; do not write them in your answer.\n\n", speakers::TAGS_HELP));
+    }
+    out.push_str("SEGMENTS\n");
     for (n, segment) in chunk.iter().enumerate() {
+        let tag = segment.source.map(|source| format!("{} ", source.tag())).unwrap_or_default();
         let text = segment.text.replace('\n', " ");
         match &segment.alt {
-            Some(alt) if *alt != segment.text => out.push_str(&format!("{}. A: {} | B: {}\n", n + 1, text, alt.replace('\n', " "))),
-            _ => out.push_str(&format!("{}. {}\n", n + 1, text)),
+            Some(alt) if *alt != segment.text => out.push_str(&format!("{}. {}A: {} | B: {}\n", n + 1, tag, text, alt.replace('\n', " "))),
+            _ => out.push_str(&format!("{}. {}{}\n", n + 1, tag, text)),
         }
     }
     out
@@ -162,7 +174,13 @@ fn parse_answer(answer: &str, expected: usize) -> Option<Vec<Option<String>>> {
         if n == 0 || n > expected {
             continue;
         }
+        // A hint copied back by mistake is not part of the text.
         let text = text.trim();
+        let text = [Source::Mic, Source::System]
+            .iter()
+            .find_map(|source| text.strip_prefix(source.tag()))
+            .unwrap_or(text)
+            .trim_start();
         if text.is_empty() {
             continue; // unanswered: the chunk is kept as it is
         }
@@ -181,13 +199,22 @@ mod tests {
         assert_eq!(lines, vec![Some("Hello there".into()), None, Some("ok".into())]);
         assert!(parse_answer("1. only one", 2).is_none());
         assert!(parse_answer("1. a\n2.\n", 2).is_none());
+        assert_eq!(parse_answer("1. [system] hi", 1), Some(vec![Some("hi".into())]));
         assert_eq!(parse_answer("Here you go\n1. a\n", 1), Some(vec![Some("a".into())]));
     }
 
     #[test]
     fn numbers_segments_with_second_reading() {
-        let segment = |text: &str, alt: Option<&str>| Segment { id: String::new(), text: text.into(), alt: alt.map(Into::into) };
+        let segment = |text: &str, alt: Option<&str>| Segment { id: String::new(), text: text.into(), alt: alt.map(Into::into), source: None };
         let block = numbered(&[segment("hello", None), segment("deploy tomorrow", Some("de ploy tomorrow")), segment("x", Some("x"))]);
         assert_eq!(block, "SEGMENTS\n1. hello\n2. A: deploy tomorrow | B: de ploy tomorrow\n3. x\n");
+    }
+
+    #[test]
+    fn numbers_segments_with_speaker_hints() {
+        let segment = |text: &str, source| Segment { id: String::new(), text: text.into(), alt: None, source };
+        let block = numbered(&[segment("hello", Some(Source::Mic)), segment("hi", Some(Source::System)), segment("ok", None)]);
+        assert!(block.starts_with("Speaker hints: "));
+        assert!(block.ends_with("SEGMENTS\n1. [mic] hello\n2. [system] hi\n3. ok\n"));
     }
 }

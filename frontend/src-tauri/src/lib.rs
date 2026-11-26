@@ -51,6 +51,7 @@ pub mod health; // Fork: health check of the meeting -> Notion flow
 pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, audio retention
 pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
 pub mod post_meeting; // Fork: re-transcription, clean-up and Notion after the meeting
+mod speakers; // Fork: microphone/system timeline (speakers.json)
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;

@@ -100,7 +100,9 @@ as "(already existing)".
 
 ## Transcript quality
 The transcript is automatic: names and technical terms may be garbled. Fix them using the known project and
-people names (e.g. {{NAME_FIXES}}). If the text is too short or is not a meeting (less than ~2 minutes of
+people names (e.g. {{NAME_FIXES}}). Lines may start with `[mic]` (the user or people in the same room)
+or `[system]` (remote participants), see META `speaker_tags`: use them to tell who committed to what,
+but they are automatic hints, not certainties. If the text is too short or is not a meeting (less than ~2 minutes of
 useful content), write NOTHING in Notion and answer with status "skipped".
 
 ## Final output (last line, JSON only, on one line)
