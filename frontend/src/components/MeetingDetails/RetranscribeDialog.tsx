@@ -343,7 +343,7 @@ export function RetranscribeDialog({
                 <span className="text-sm font-medium">Model</span>
               </div>
               <Select value={selectedModelKey} onValueChange={setSelectedModelKey} disabled={loadingModels}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="w-full min-w-0 [&>span]:min-w-0 [&>span]:truncate" title={availableModels.find((m) => `${m.provider}:${m.name}` === selectedModelKey)?.displayName}>
                   <SelectValue placeholder={loadingModels ? "Loading models..." : "Select model"} />
                 </SelectTrigger>
                 <SelectContent>
