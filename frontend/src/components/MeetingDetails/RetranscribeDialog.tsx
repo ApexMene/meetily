@@ -343,7 +343,8 @@ export function RetranscribeDialog({
                 <span className="text-sm font-medium">Model</span>
               </div>
               <Select value={selectedModelKey} onValueChange={setSelectedModelKey} disabled={loadingModels}>
-                <SelectTrigger className="w-full">
+                {/* Fork: long (custom) model names are cut with an ellipsis; the full name is the tooltip */}
+                <SelectTrigger className="w-full min-w-0 [&>span]:min-w-0 [&>span]:truncate" title={selectedModelDetails?.displayName}>
                   <SelectValue placeholder={loadingModels ? "Loading models..." : "Select model"} />
                 </SelectTrigger>
                 <SelectContent>
