@@ -62,6 +62,7 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speaker: t.speaker,
     }));
   }, [transcripts, usePagination, segments]);
   const [trimming, setTrimming] = useState(false); // Fork: remove parts of a meeting

@@ -83,6 +83,7 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, model:
     let dir = super::data_dir(app).ok_or("app data directory unavailable")?;
     let prompt = load_prompt(&dir);
     let alt = load_alt_texts(folder);
+    speakers::tag_meeting(pool, meeting_id, folder).await; // no-op when the segments are already tagged
     let runs = speakers::load(folder);
     let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
         .bind(meeting_id)

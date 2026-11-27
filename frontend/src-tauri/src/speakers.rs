@@ -30,6 +30,14 @@ pub enum Source {
 }
 
 impl Source {
+    /// Value stored in `transcripts.speaker`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::Mic => "mic",
+            Source::System => "system",
+        }
+    }
+
     pub fn tag(self) -> &'static str {
         match self {
             Source::Mic => "[mic]",
@@ -122,6 +130,42 @@ pub fn dominant(runs: &[Run], start: f64, end: f64) -> Option<Source> {
     } else {
         None
     }
+}
+
+/// Stores the dominant source of every segment of a meeting in `transcripts.speaker`
+/// ("mic"/"system", NULL when unclear). Idempotent; does nothing without a timeline, so it can
+/// run after the save, the re-transcription and the clean-up alike. Returns the segments tagged.
+pub async fn tag_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, folder: &Path) -> usize {
+    let runs = load(folder);
+    if runs.is_empty() {
+        return 0;
+    }
+    let rows: Vec<(String, Option<f64>, Option<f64>)> =
+        match sqlx::query_as("SELECT id, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ?")
+            .bind(meeting_id)
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!("speakers: cannot read the segments of {}: {}", meeting_id, error);
+                return 0;
+            }
+        };
+    let mut tagged = 0;
+    for (id, start, end) in rows {
+        let source = start.zip(end).and_then(|(start, end)| dominant(&runs, start, end));
+        let result = sqlx::query("UPDATE transcripts SET speaker = ? WHERE id = ?")
+            .bind(source.map(Source::as_str))
+            .bind(&id)
+            .execute(pool)
+            .await;
+        match result {
+            Ok(_) => tagged += usize::from(source.is_some()),
+            Err(error) => log::warn!("speakers: cannot tag segment {}: {}", id, error),
+        }
+    }
+    tagged
 }
 
 /// Explanation of the tags for Claude, given with the transcript.

@@ -543,6 +543,9 @@ async fn run_retranscription<R: Runtime>(
         meeting_id
     );
 
+    // Fork: the new rows lose the speaker of the old ones; tag them from the saved timeline
+    crate::speakers::tag_meeting(pool, &meeting_id, &folder_path).await;
+
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
 

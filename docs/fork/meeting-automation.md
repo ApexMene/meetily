@@ -53,8 +53,12 @@ louder source: microphone (the user or people in the room) or system audio (remo
 system audio wins unless the microphone is about 6 dB louder, because without a headset the
 microphone also picks up the speakers. Runs of labels are saved to `speakers.json` when the
 recording stops. A transcript segment gets `[mic]` or `[system]` when one source covers 70% of
-its time; the tags are shown to Claude in the clean-up and in the recap, never stored in the
-transcript. Meetings recorded earlier or imported have no timeline and no tags.
+its time; the tags are shown to Claude in the clean-up and in the recap. The same tag is stored
+in `transcripts.speaker` (`mic`/`system`, NULL when unclear) by `speakers::tag_meeting`, called
+after the transcript is saved, after a re-transcription and at the start of the clean-up, and the
+transcript view shows a You/Others badge. The tags are a heuristic on the mixed audio, not a
+guarantee: overlapping speech and speaker echo can mislabel a segment. Meetings recorded earlier
+or imported have no timeline and no tags.
 
 ## 4. After-meeting queue
 

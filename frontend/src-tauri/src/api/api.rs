@@ -138,6 +138,9 @@ pub struct MeetingTranscript {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    // Fork: "mic" (the user) or "system" (remote participants)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -904,6 +907,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker: t.speaker,
                 })
                 .collect::<Vec<_>>();
 
@@ -982,6 +986,7 @@ pub async fn api_save_transcript<R: Runtime>(
     let pool = state.db_manager.pool();
 
     // Now, call the repository with the correctly typed data.
+    let tag_folder = folder_path.clone();
     match TranscriptsRepository::save_transcript(
         pool,
         &meeting_title,
@@ -991,6 +996,10 @@ pub async fn api_save_transcript<R: Runtime>(
     .await
     {
         Ok(meeting_id) => {
+            // Fork: who spoke (microphone or system audio), from the timeline saved at stop
+            if let Some(folder) = tag_folder {
+                crate::speakers::tag_meeting(pool, &meeting_id, std::path::Path::new(&folder)).await;
+            }
             log_info!(
                 "Successfully saved transcript and created meeting with id: {}",
                 meeting_id
