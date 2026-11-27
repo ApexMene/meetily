@@ -1669,6 +1669,8 @@ fn spawn_device_event_processor<R: Runtime>(
     session: Arc<super::RecordingState>,
     follow_defaults: (bool, bool),
 ) {
+    // Fork: silent-channel watcher for this recording (side task, fails safe)
+    crate::recording_guard::start(app.clone(), session.clone());
     tokio::spawn(async move {
         #[cfg(not(target_os = "linux"))]
         let _ = follow_defaults;
@@ -2073,6 +2075,7 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
         "[MIC_FALLBACK] Starting fallback from disconnected device '{}'",
         disconnected_name
     );
+    let gap_started_at = session.get_active_recording_duration();
 
     // Let macOS finish swapping the system default input away from the dead
     // device. 150ms is enough in practice for the built-in mic to become the
@@ -2242,6 +2245,15 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
                 fallback_name
             );
             MIC_FALLBACK_FAILED_ATTEMPTS.store(0, Ordering::SeqCst);
+            // Fork: mark the hole in the transcript (side effect only, never fails the swap)
+            if let (Some(start), Some(end)) = (gap_started_at, session.get_active_recording_duration()) {
+                super::transcription::worker::emit_transcript_marker(
+                    &app,
+                    crate::recording_guard::gap_marker_text(start, end - start),
+                    start,
+                    end,
+                );
+            }
         }
         Err(e) => {
             error!("[MIC_FALLBACK] Fallback swap failed: {}", e);

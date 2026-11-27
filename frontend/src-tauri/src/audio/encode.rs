@@ -54,7 +54,7 @@ pub fn encode_single_audio(
             "+faststart", // Optimize for web streaming
             "-f",
             "mp4",
-            output_path.to_str().unwrap(),
+            &*output_path.to_string_lossy(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -71,16 +71,29 @@ pub fn encode_single_audio(
     debug!("FFmpeg command: {:?}", command);
 
     #[allow(clippy::zombie_processes)]
-    let mut ffmpeg = command.spawn().expect("Failed to spawn FFmpeg process");
+    let mut ffmpeg = command
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn FFmpeg process: {}", e))?;
     debug!("FFmpeg process spawned");
-    let mut stdin = ffmpeg.stdin.take().expect("Failed to open stdin");
+    let Some(mut stdin) = ffmpeg.stdin.take() else {
+        let _ = ffmpeg.kill();
+        let _ = ffmpeg.wait();
+        return Err(anyhow::anyhow!("Failed to open FFmpeg stdin"));
+    };
 
-    stdin.write_all(data)?;
+    if let Err(e) = stdin.write_all(data) {
+        drop(stdin);
+        let _ = ffmpeg.kill();
+        let _ = ffmpeg.wait();
+        return Err(anyhow::anyhow!("Failed to send audio to FFmpeg: {}", e));
+    }
 
     debug!("Dropping stdin");
     drop(stdin);
     debug!("Waiting for FFmpeg process to exit");
-    let output = ffmpeg.wait_with_output().unwrap();
+    let output = ffmpeg
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("Failed to wait for FFmpeg: {}", e))?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

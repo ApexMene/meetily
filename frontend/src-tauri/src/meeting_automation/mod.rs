@@ -16,6 +16,7 @@ mod retention;
 mod shortcut;
 
 pub use autostart::AUTOSTART_FLAG;
+pub use detector::meeting_app_active;
 
 use crate::fork_store::Store;
 use serde::{Deserialize, Serialize};

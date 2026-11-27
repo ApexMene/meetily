@@ -48,6 +48,7 @@ pub mod doodle;
 pub mod notifications;
 mod fork_store; // Fork: small JSON settings files
 pub mod health; // Fork: health check of the meeting -> Notion flow
+pub mod recording_guard; // Fork: silent-channel alert, audio gap marker, crash recovery of recordings
 pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, audio retention
 pub mod meeting_edit; // Fork: merge meetings, remove parts of a meeting
 pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
@@ -727,6 +728,7 @@ pub fn run() {
             post_meeting::start(_app.handle().clone());
             health::start(_app.handle().clone());
             meeting_automation::start(_app.handle().clone());
+            recording_guard::recovery::start(_app.handle().clone());
             // Fork: started by Windows at logon -> stay in the tray, no window.
             if std::env::args().any(|a| a == meeting_automation::AUTOSTART_FLAG) {
                 if let Some(window) = _app.get_webview_window("main") {
@@ -760,6 +762,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // Fork: automatic meetings and the meeting bar
+            recording_guard::recording_guard_settings_get,
+            recording_guard::recording_guard_settings_set,
             meeting_automation::automation_settings_get,
             meeting_automation::automation_settings_set,
             meeting_automation::bar::meeting_bar_open,

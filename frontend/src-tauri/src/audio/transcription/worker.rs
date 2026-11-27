@@ -489,6 +489,28 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
 }
 
 /// Format current timestamp (wall-clock time)
+/// Fork: adds a plain text line (e.g. "[audio interrotto 12:34 (8 s)]") to the live transcript so
+/// a hole in the recording is visible instead of silent. Failure is only logged.
+pub fn emit_transcript_marker<R: Runtime>(app: &AppHandle<R>, text: String, start_secs: f64, end_secs: f64) {
+    let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let duration = (end_secs - start_secs).max(0.0);
+    let update = TranscriptUpdate {
+        text,
+        timestamp: format_current_timestamp(),
+        source: "Audio".to_string(),
+        sequence_id,
+        chunk_start_time: start_secs,
+        is_partial: false,
+        confidence: 1.0,
+        audio_start_time: start_secs,
+        audio_end_time: end_secs.max(start_secs),
+        duration,
+    };
+    if let Err(error) = app.emit("transcript-update", &update) {
+        warn!("cannot emit the transcript marker: {}", error);
+    }
+}
+
 fn format_current_timestamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

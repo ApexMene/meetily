@@ -10,7 +10,7 @@ import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
-import { MeetingAutomationSettings, PostMeetingSettings } from '@/components/ForkSettings';
+import { MeetingAutomationSettings, PostMeetingSettings, RecordingGuardSettings } from '@/components/ForkSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
@@ -116,6 +116,7 @@ export default function SettingsPage() {
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />
+              <RecordingGuardSettings />
             </TabsContent>
             <TabsContent value="Transcriptionmodels">
               <TranscriptSettings

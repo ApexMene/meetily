@@ -6,6 +6,8 @@ use super::recording_state::AudioChunk;
 use serde::{Serialize, Deserialize};
 
 use super::ffmpeg::find_ffmpeg_path;
+use super::checkpoint_files::{chunk_path, concat_list, part_path, remove_partial_files, valid_checkpoints, CheckpointPolicy};
+use std::path::Path;
 
 /// Audio data without device type (we only store mixed audio)
 #[derive(Clone)]
@@ -18,12 +20,19 @@ struct AudioData {
 /// to minimize memory usage and enable crash recovery
 pub struct IncrementalAudioSaver {
     checkpoint_buffer: Vec<AudioData>,
-    checkpoint_interval_samples: usize,  // 30s at 48kHz = 1,440,000 samples
     checkpoint_count: u32,
     checkpoints_dir: PathBuf,
     meeting_folder: PathBuf,
     sample_rate: u32,
+    /// When to write, and how to back off while writes fail (disk full...).
+    policy: CheckpointPolicy,
+    /// Samples discarded because writes kept failing for longer than the memory cap allows.
+    dropped_samples: usize,
 }
+
+/// While checkpoint writes fail, this many intervals (30 s each) of audio wait in memory
+/// (about 5 minutes, 57 MB at 48 kHz mono) before the oldest is discarded.
+const MAX_BUFFERED_INTERVALS: usize = 10;
 
 impl IncrementalAudioSaver {
     /// Create a new incremental saver
@@ -41,40 +50,67 @@ impl IncrementalAudioSaver {
 
         Ok(Self {
             checkpoint_buffer: Vec::new(),
-            checkpoint_interval_samples: sample_rate as usize * 30, // 30 seconds
             checkpoint_count: 0,
             checkpoints_dir,
             meeting_folder,
             sample_rate,
+            policy: CheckpointPolicy::new(sample_rate as usize * 30, MAX_BUFFERED_INTERVALS), // 30 seconds
+            dropped_samples: 0,
         })
     }
 
+    fn buffered_samples(&self) -> usize {
+        self.checkpoint_buffer.iter().map(|c| c.data.len()).sum()
+    }
+
     /// Add an audio chunk to the buffer
-    /// Automatically saves a checkpoint when buffer reaches 30 seconds
+    /// Automatically saves a checkpoint when buffer reaches 30 seconds.
+    /// A failed write (disk full, FFmpeg problem) never fails the recording: the audio stays in
+    /// memory, the write is retried one interval later, and the failure is logged.
     pub fn add_chunk(&mut self, chunk: AudioChunk) -> Result<()> {
-        let audio_data = AudioData {
-            data: chunk.data,
-            // sample_rate: chunk.sample_rate,
-        };
+        self.checkpoint_buffer.push(AudioData { data: chunk.data });
 
-        self.checkpoint_buffer.push(audio_data);
-
-        // Calculate total samples in buffer
-        let total_samples: usize = self.checkpoint_buffer
-            .iter()
-            .map(|c| c.data.len())
-            .sum();
-
-        // Save checkpoint when buffer reaches threshold (30 seconds)
-        if total_samples >= self.checkpoint_interval_samples {
-            self.save_checkpoint()?;
-            self.checkpoint_buffer.clear();
+        let total_samples = self.buffered_samples();
+        if self.policy.should_save(total_samples) {
+            match self.save_checkpoint() {
+                Ok(()) => {
+                    self.checkpoint_buffer.clear();
+                    self.policy.on_success();
+                }
+                Err(e) => {
+                    error!("Checkpoint write failed ({} s of audio kept in memory, will retry): {}",
+                           total_samples / self.sample_rate.max(1) as usize, e);
+                    self.policy.on_failure(total_samples);
+                }
+            }
         }
-
+        self.enforce_memory_cap();
         Ok(())
     }
 
-    /// Save current buffer as a checkpoint file
+    /// Bounded memory: if writes keep failing, discard the oldest audio beyond the cap.
+    fn enforce_memory_cap(&mut self) {
+        let mut excess = self.policy.excess(self.buffered_samples());
+        if excess == 0 {
+            return;
+        }
+        let mut dropped = 0usize;
+        while excess > 0 && self.checkpoint_buffer.len() > 1 {
+            let len = self.checkpoint_buffer.remove(0).data.len();
+            dropped += len;
+            excess = excess.saturating_sub(len);
+        }
+        if dropped > 0 {
+            if self.dropped_samples == 0 {
+                error!("Checkpoints cannot be written: discarding the oldest audio to keep memory bounded");
+            }
+            self.dropped_samples += dropped;
+            self.policy.on_dropped(dropped);
+        }
+    }
+
+    /// Save current buffer as a checkpoint file (written as `.part`, then renamed, so a crash or a
+    /// full disk never leaves a truncated chunk behind)
     fn save_checkpoint(&mut self) -> Result<()> {
         // Concatenate all chunks in buffer
         let audio_data: Vec<f32> = self.checkpoint_buffer
@@ -88,19 +124,23 @@ impl IncrementalAudioSaver {
             return Ok(());
         }
 
-        // Generate checkpoint filename
-        let checkpoint_path = self.checkpoints_dir
-            .join(format!("audio_chunk_{:03}.mp4", self.checkpoint_count));
+        let checkpoint_path = chunk_path(&self.checkpoints_dir, self.checkpoint_count);
+        let part = part_path(&checkpoint_path);
 
-        // Encode and save checkpoint
-        encode_single_audio(
+        let written = encode_single_audio(
             bytemuck::cast_slice(&audio_data),
             self.sample_rate,
             1,  // mono
-            &checkpoint_path
-        )?;
+            &part,
+        )
+        .map_err(anyhow::Error::from)
+        .and_then(|_| std::fs::rename(&part, &checkpoint_path).map_err(anyhow::Error::from));
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
 
-        let duration_seconds = audio_data.len() as f32 / self.sample_rate as f32;
+        let duration_seconds = audio_data.len() as f32 / self.sample_rate.max(1) as f32;
         self.checkpoint_count += 1;
 
         info!("Saved checkpoint {}: {:.2}s of audio ({} samples)",
@@ -117,24 +157,30 @@ impl IncrementalAudioSaver {
     pub async fn finalize(&mut self) -> Result<PathBuf> {
         info!("Finalizing incremental recording...");
 
-        // Save final buffer if not empty
+        // Save final buffer if not empty. If this last write fails the earlier checkpoints are
+        // still merged: the recording keeps everything that reached the disk.
         if !self.checkpoint_buffer.is_empty() {
             info!("Saving final checkpoint with remaining {} chunks", self.checkpoint_buffer.len());
-            self.save_checkpoint()?;
-            self.checkpoint_buffer.clear();
+            match self.save_checkpoint() {
+                Ok(()) => self.checkpoint_buffer.clear(),
+                Err(e) => error!("Final checkpoint could not be written ({} s of audio lost): {}",
+                                 self.buffered_samples() / self.sample_rate.max(1) as usize, e),
+            }
+        }
+        if self.dropped_samples > 0 {
+            error!("{} s of audio were discarded during the recording because checkpoints could not be written",
+                   self.dropped_samples / self.sample_rate.max(1) as usize);
         }
 
-        if self.checkpoint_count == 0 {
-            return Err(anyhow!("No audio checkpoints to merge - recording may have failed"));
-        }
-
-        // Merge all checkpoints using FFmpeg concat
+        let folder = self.meeting_folder.clone();
+        let merged = tokio::task::spawn_blocking(move || merge_checkpoint_dir(&folder))
+            .await
+            .map_err(|e| anyhow!("Merge task failed: {}", e))??;
         let final_audio_path = self.meeting_folder.join("audio.mp4");
-        self.merge_checkpoints(&final_audio_path).await?;
 
-        // Clean up checkpoints directory
-        info!("Cleaning up {} checkpoint files", self.checkpoint_count);
-        if let Err(_) = std::fs::remove_dir_all(&self.checkpoints_dir) {
+        // Clean up checkpoints directory (only after a successful merge)
+        info!("Cleaning up {} checkpoint files", merged);
+        if std::fs::remove_dir_all(&self.checkpoints_dir).is_err() {
             warn!("Failed to clean up checkpoints");
             // Non-fatal - user can manually delete
         }
@@ -142,75 +188,6 @@ impl IncrementalAudioSaver {
         info!("Finalized recording");
 
         Ok(final_audio_path)
-    }
-
-    /// Merge all checkpoint files into final audio.mp4 using FFmpeg concat
-    /// Uses concat demuxer for fast merging without re-encoding
-    async fn merge_checkpoints(&self, output: &PathBuf) -> Result<()> {
-        info!("Merging {} checkpoints into final audio file...", self.checkpoint_count);
-
-        // Create concat list file for FFmpeg
-        let list_file = self.checkpoints_dir.join("concat_list.txt");
-        let mut list_content = String::new();
-
-        for i in 0..self.checkpoint_count {
-            let checkpoint_path = self.checkpoints_dir
-                .join(format!("audio_chunk_{:03}.mp4", i));
-
-            // Verify checkpoint exists
-            if !checkpoint_path.exists() {
-                return Err(anyhow!("Checkpoint file missing: {}", checkpoint_path.display()));
-            }
-
-            // Use absolute path for FFmpeg (required for safe mode)
-            let abs_path = checkpoint_path.canonicalize()?;
-            list_content.push_str(&format!("file '{}'\n", abs_path.display()));
-        }
-
-        std::fs::write(&list_file, list_content)?;
-
-        let ffmpeg_path = find_ffmpeg_path()
-            .ok_or_else(|| anyhow!("FFmpeg not found. Please install FFmpeg to finalize recordings."))?;
-        info!("FFmpeg selected");
-
-        // Run FFmpeg concat command
-        // Using concat demuxer with copy codec for fast merging (no re-encoding)
-        
-        let mut command = std::process::Command::new(ffmpeg_path);
-        
-        command.args(&[
-            "-f", "concat",          // Use concat demuxer
-            "-safe", "0",            // Allow absolute paths
-            "-i", list_file.to_str().unwrap(),
-            "-c", "copy",            // Copy codec - no re-encoding!
-            "-y",                    // Overwrite output file
-            output.to_str().unwrap()
-        ]);
-
-        // Hide console window on Windows to prevent CMD popup during finalization
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        let ffmpeg_output = command.output()?;
-
-        if !ffmpeg_output.status.success() {
-            let stderr = String::from_utf8_lossy(&ffmpeg_output.stderr);
-            error!("FFmpeg merge failed");
-            return Err(anyhow!("FFmpeg concat failed: {}", stderr));
-        }
-
-        // Verify output file was created
-        if !output.exists() {
-            return Err(anyhow!("Merged audio file was not created: {}", output.display()));
-        }
-
-        info!("Successfully merged {} checkpoints", self.checkpoint_count);
-
-        Ok(())
     }
 
     /// Get the meeting folder path
@@ -222,6 +199,65 @@ impl IncrementalAudioSaver {
     pub fn get_checkpoint_count(&self) -> u32 {
         self.checkpoint_count
     }
+}
+
+/// Merges the complete chunks of `<meeting_folder>/.checkpoints` into `<meeting_folder>/audio.mp4`
+/// with an FFmpeg concat (no re-encoding) and returns how many chunks were merged. A missing or
+/// empty chunk is skipped, so a damaged recording still yields everything that was written. The
+/// output is written as `audio.mp4.part` and renamed, and the chunks are never deleted here.
+pub fn merge_checkpoint_dir(meeting_folder: &Path) -> Result<u32> {
+    let dir = meeting_folder.join(".checkpoints");
+    remove_partial_files(&dir);
+    let files = valid_checkpoints(&dir)
+        .map_err(|e| anyhow!("Cannot read the checkpoints directory {}: {}", dir.display(), e))?;
+    if files.is_empty() {
+        return Err(anyhow!("No audio checkpoints to merge - recording may have failed"));
+    }
+    info!("Merging {} checkpoints into final audio file...", files.len());
+
+    // Absolute paths: ffmpeg's safe mode refuses relative ones.
+    let absolute: Vec<PathBuf> = files.iter().map(|p| p.canonicalize().unwrap_or_else(|_| p.clone())).collect();
+    let list_file = dir.join("concat_list.txt");
+    std::fs::write(&list_file, concat_list(&absolute))
+        .map_err(|e| anyhow!("Cannot write the concat list: {}", e))?;
+
+    let ffmpeg_path = find_ffmpeg_path()
+        .ok_or_else(|| anyhow!("FFmpeg not found. Please install FFmpeg to finalize recordings."))?;
+
+    let output = meeting_folder.join("audio.mp4");
+    let part = part_path(&output);
+
+    let mut command = std::process::Command::new(ffmpeg_path);
+    command
+        .args(["-f", "concat", "-safe", "0", "-i"])
+        .arg(&list_file)
+        .args(["-c", "copy", "-f", "mp4", "-y"])
+        .arg(&part);
+
+    // Hide console window on Windows to prevent CMD popup during finalization
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let result = command.output().map_err(|e| anyhow!("Failed to run FFmpeg: {}", e))?;
+    if !result.status.success() {
+        let _ = std::fs::remove_file(&part);
+        error!("FFmpeg merge failed");
+        return Err(anyhow!("FFmpeg concat failed: {}", String::from_utf8_lossy(&result.stderr)));
+    }
+    let produced = std::fs::metadata(&part).map(|m| m.len() > 0).unwrap_or(false);
+    if !produced {
+        let _ = std::fs::remove_file(&part);
+        return Err(anyhow!("Merged audio file was not created: {}", output.display()));
+    }
+    std::fs::rename(&part, &output).map_err(|e| anyhow!("Cannot move the merged audio into place: {}", e))?;
+    let _ = std::fs::remove_file(&list_file);
+
+    info!("Successfully merged {} checkpoints", files.len());
+    Ok(files.len() as u32)
 }
 
 /// Audio recovery status for transcript recovery feature
@@ -246,127 +282,56 @@ pub async fn recover_audio_from_checkpoints(
     let folder_path = PathBuf::from(&meeting_folder);
     let checkpoints_dir = folder_path.join(".checkpoints");
 
-    // Check if checkpoints directory exists
+    let none = |message: &str| AudioRecoveryStatus {
+        status: "none".to_string(),
+        chunk_count: 0,
+        estimated_duration_seconds: 0.0,
+        audio_file_path: None,
+        message: message.to_string(),
+    };
+
     if !checkpoints_dir.exists() {
         info!("No checkpoints directory found");
-        return Ok(AudioRecoveryStatus {
-            status: "none".to_string(),
-            chunk_count: 0,
-            estimated_duration_seconds: 0.0,
-            audio_file_path: None,
-            message: "No audio checkpoints found".to_string(),
-        });
+        return Ok(none("No audio checkpoints found"));
     }
-
-    // Scan for checkpoint files
-    let mut checkpoint_files: Vec<_> = std::fs::read_dir(&checkpoints_dir)
-        .map_err(|e| format!("Failed to read checkpoints directory: {}", e))?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.path().extension().and_then(|s| s.to_str()) == Some("mp4")
-        })
-        .collect();
-
-    if checkpoint_files.is_empty() {
+    let chunk_count = match valid_checkpoints(&checkpoints_dir) {
+        Ok(files) => files.len() as u32,
+        Err(e) => return Err(format!("Failed to read checkpoints directory: {}", e)),
+    };
+    if chunk_count == 0 {
         info!("No checkpoint files found");
-        return Ok(AudioRecoveryStatus {
-            status: "none".to_string(),
-            chunk_count: 0,
-            estimated_duration_seconds: 0.0,
-            audio_file_path: None,
-            message: "No audio checkpoint files found".to_string(),
-        });
+        return Ok(none("No audio checkpoint files found"));
     }
-
-    // Sort by filename (audio_chunk_000.mp4, audio_chunk_001.mp4, etc.)
-    checkpoint_files.sort_by_key(|entry| entry.path());
-
-    let chunk_count = checkpoint_files.len() as u32;
     let estimated_duration = (chunk_count as f64) * 30.0; // 30 seconds per chunk
-
     info!("Found {} checkpoint files, estimated duration: {:.2}s", chunk_count, estimated_duration);
 
-    // Create FFmpeg concat file
-    let concat_file_path = checkpoints_dir.join("concat_list.txt");
-    let mut concat_content = String::new();
+    let folder = folder_path.clone();
+    let merged = tokio::task::spawn_blocking(move || merge_checkpoint_dir(&folder))
+        .await
+        .map_err(|e| format!("Recovery task failed: {}", e))?;
 
-    for entry in &checkpoint_files {
-        let path = entry.path().canonicalize()
-            .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
-        concat_content.push_str(&format!("file '{}'\n", path.display()));
-    }
-
-    std::fs::write(&concat_file_path, concat_content)
-        .map_err(|e| format!("Failed to write concat file: {}", e))?;
-
-    // Run FFmpeg to merge chunks
-    let output_path = folder_path.join("audio.mp4");
-    let output_path_str = output_path.to_str()
-        .ok_or("Invalid output path")?
-        .to_string();
-
-    let ffmpeg_path = find_ffmpeg_path()
-        .ok_or_else(|| "FFmpeg not found. Please install FFmpeg to recover audio.".to_string())?;
-    info!("FFmpeg selected for recovery");
-
-    let mut command = std::process::Command::new(ffmpeg_path);
-
-    command.args(&[
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concat_file_path.to_str().unwrap(),
-        "-c", "copy",
-        "-y", // Overwrite if exists
-        &output_path_str
-    ]);
-
-    // Hide console window on Windows
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let ffmpeg_result = command.output();
-
-    match ffmpeg_result {
-        Ok(output) if output.status.success() => {
-            // Clean up concat file
-            let _ = std::fs::remove_file(concat_file_path);
-
-            info!("Successfully recovered audio from {} checkpoints", chunk_count);
-
-            Ok(AudioRecoveryStatus {
+    Ok(match merged {
+        Ok(count) => {
+            info!("Successfully recovered audio from {} checkpoints", count);
+            AudioRecoveryStatus {
                 status: "success".to_string(),
-                chunk_count,
-                estimated_duration_seconds: estimated_duration,
-                audio_file_path: Some(output_path_str),
-                message: format!("Successfully recovered {} audio chunks", chunk_count),
-            })
-        }
-        Ok(output) => {
-            let error = String::from_utf8_lossy(&output.stderr);
-            error!("FFmpeg recovery failed");
-            Ok(AudioRecoveryStatus {
-                status: "failed".to_string(),
-                chunk_count,
-                estimated_duration_seconds: estimated_duration,
-                audio_file_path: None,
-                message: format!("FFmpeg failed: {}", error),
-            })
+                chunk_count: count,
+                estimated_duration_seconds: count as f64 * 30.0,
+                audio_file_path: Some(folder_path.join("audio.mp4").to_string_lossy().into_owned()),
+                message: format!("Successfully recovered {} audio chunks", count),
+            }
         }
         Err(e) => {
-            error!("Failed to run FFmpeg");
-            Ok(AudioRecoveryStatus {
+            error!("Audio recovery failed: {}", e);
+            AudioRecoveryStatus {
                 status: "failed".to_string(),
                 chunk_count,
                 estimated_duration_seconds: estimated_duration,
                 audio_file_path: None,
-                message: format!("Failed to run FFmpeg: {}", e),
-            })
+                message: format!("Audio recovery failed: {}", e),
+            }
         }
-    }
+    })
 }
 
 /// Clean up checkpoint files after successful recording or recovery
@@ -401,13 +366,9 @@ pub async fn has_audio_checkpoints(meeting_folder: String) -> Result<bool, Strin
         return Ok(false);
     }
 
-    // Scan for .mp4 checkpoint files
-    let has_mp4_files = std::fs::read_dir(&checkpoints_dir)
+    let has_mp4_files = !valid_checkpoints(&checkpoints_dir)
         .map_err(|e| format!("Failed to read checkpoints directory: {}", e))?
-        .filter_map(|entry| entry.ok())
-        .any(|entry| {
-            entry.path().extension().and_then(|s| s.to_str()) == Some("mp4")
-        });
+        .is_empty();
 
     Ok(has_mp4_files)
 }

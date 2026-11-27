@@ -21,6 +21,11 @@ interface AutomationSettings {
   audioRetentionDays: number;
   startWithWindows: boolean;
 }
+interface RecordingGuard {
+  silenceAlertEnabled: boolean;
+  silenceSeconds: number;
+  silenceThresholdDb: number;
+}
 type Retranscribe = 'off' | 'model' | 'full';
 interface PostMeeting {
   retranscribe: Retranscribe;
@@ -186,6 +191,52 @@ export function MeetingAutomationSettings() {
       </Row>
       <Row title="Start with Windows" help="Starts hidden, with the icon next to the clock.">
         <Switch checked={settings.startWithWindows} onCheckedChange={(v) => save({ startWithWindows: v })} />
+      </Row>
+    </div>
+  );
+}
+
+/** Recording tab: warn when the meeting audio or the microphone goes silent during a recording. */
+export function RecordingGuardSettings() {
+  const { settings, save } = useSettings<RecordingGuard>('recording_guard_settings_get', 'recording_guard_settings_set');
+  const [seconds, setSeconds] = useState('');
+  const [db, setDb] = useState('');
+  useEffect(() => {
+    if (settings) { setSeconds(String(settings.silenceSeconds)); setDb(String(settings.silenceThresholdDb)); }
+  }, [settings]);
+  if (!settings) return null;
+
+  const saveSeconds = () => {
+    const n = Math.max(10, Math.min(3600, parseInt(seconds || '0', 10) || settings.silenceSeconds));
+    setSeconds(String(n));
+    if (n !== settings.silenceSeconds) save({ silenceSeconds: n });
+  };
+  const saveDb = () => {
+    const n = Math.max(-100, Math.min(-20, parseFloat(db) || settings.silenceThresholdDb));
+    setDb(String(n));
+    if (n !== settings.silenceThresholdDb) save({ silenceThresholdDb: n });
+  };
+
+  return (
+    <div className={CARD + ' mt-6'}>
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">Recording guard</h3>
+      <Row title="Warn when the audio goes silent"
+        help="Shows a notification if the meeting audio (Others) does not arrive while you are speaking or a meeting app is using the microphone, or if the microphone is silent while others speak. One notification per episode.">
+        <Switch checked={settings.silenceAlertEnabled} onCheckedChange={(v) => save({ silenceAlertEnabled: v })} />
+      </Row>
+      <Row title="Silence time before warning" help="Seconds. The microphone gets twice as long, because listening without speaking is normal.">
+        <div className="flex items-center gap-2">
+          <Input type="number" min={10} max={3600} value={seconds} onChange={(e) => setSeconds(e.target.value)} onBlur={saveSeconds}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} className="w-20 text-right" />
+          <span className="text-sm text-gray-600">s</span>
+        </div>
+      </Row>
+      <Row title="Silence level" help="Under this level a channel counts as silent (dBFS, -100 to -20). Lower is more sensitive to real silence only.">
+        <div className="flex items-center gap-2">
+          <Input type="number" min={-100} max={-20} value={db} onChange={(e) => setDb(e.target.value)} onBlur={saveDb}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} className="w-20 text-right" />
+          <span className="text-sm text-gray-600">dB</span>
+        </div>
       </Row>
     </div>
   );

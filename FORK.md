@@ -38,6 +38,13 @@ non vanno in conflitto:
   **Merge**; nella pagina del meeting **Remove parts…** toglie i segmenti scelti dalla trascrizione e
   gli stessi intervalli dall'audio. Dettagli in [docs/fork/meeting-edit.md](docs/fork/meeting-edit.md).
   Codice in `frontend/src-tauri/src/meeting_edit/` e `frontend/src/components/MeetingEdit/`.
+- **Recording guard** (acceso di default, impostazioni in Settings > Recording): avviso se il canale
+  dell'audio della riunione o il microfono restano muti troppo a lungo durante una registrazione;
+  marcatore "[audio interrotto mm:ss]" nella trascrizione quando il microfono viene sostituito;
+  salvataggio dei pezzi audio a prova di crash (scrittura atomica, memoria limitata, il fallimento
+  del salvataggio non ferma mai la registrazione) e recupero automatico all'avvio di una
+  registrazione interrotta. Dettagli in [docs/fork/recording-guard.md](docs/fork/recording-guard.md).
+  Codice in `frontend/src-tauri/src/recording_guard/` e `audio/checkpoint_files.rs`.
 
 Durante un merge da upstream, cercare `Fork:` per ritrovare tutti gli agganci.
 

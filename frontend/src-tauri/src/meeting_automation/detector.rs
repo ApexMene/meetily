@@ -83,6 +83,16 @@ fn meeting_app(apps_in_use: &[String], apps: &[String], own_exe: &str) -> Option
         .map(|key| display_name(key))
 }
 
+/// True while a meeting app (Teams, Zoom...) holds the microphone. Always false off Windows.
+pub fn meeting_app_active<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let own_exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()))
+        .unwrap_or_default();
+    let apps = apps_using_microphone();
+    meeting_app(&apps, &super::settings(app).apps, &own_exe).is_some()
+}
+
 pub fn start<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         let own_exe = std::env::current_exe()
