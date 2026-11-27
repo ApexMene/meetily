@@ -449,6 +449,17 @@ mod tests {
     }
 
     #[test]
+    fn default_prompt_keeps_the_task_guardrails() {
+        // The rules the task creation depends on must survive prompt edits.
+        for needle in ["Evidence (mandatory)", "No quote, no task", "MEETING DATE", "Fill the date only when the deadline is explicit", "do NOT guess", "MEETING SUMMARY"] {
+            assert!(DEFAULT_PROMPT.contains(needle), "prompt lost: {}", needle);
+        }
+        // Every placeholder is one the .env template documents or a fixed one.
+        let env = parse_env("USER_NAME=a\nUSER_ALIASES=b\nNOTION_TASKS_DB=c\nNOTION_PROJECTS_DB=d\nNOTION_WORK_AREA=e\nSYNC_SOURCE=f\nTASK_EXAMPLE=g\nNAME_FIXES=h\n");
+        assert!(!fill_placeholders(DEFAULT_PROMPT, &env).contains("{{"));
+    }
+
+    #[test]
     fn proxy_values_are_checked() {
         assert_eq!(proxy_env("http://127.0.0.1:8080", "localhost").len(), 6);
         assert!(proxy_env("", "localhost").is_empty());

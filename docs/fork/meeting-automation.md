@@ -72,6 +72,25 @@ transcript. Meetings recorded earlier or imported have no timeline and no tags.
 - Notion pages carry `{"meetily_id": …}` and the prompt updates instead of duplicating, so a retry
   never writes twice.
 
+### 4.1 Tasks: owner, deadline, duplicates, evidence
+
+The recap agent prompt (`notion_agent/prompt.md`, the default used when the user has no own prompt
+file; an existing `<app data>/notion-agent/prompt.md` is never overwritten, copy the new sections
+into it) follows these rules. No Notion property is added: everything uses the existing ones.
+
+- Owner: `[mic]` or a named alias is the user (normal task). A named other person who delivers
+  something to the user becomes a Blocked task `Wait for <what> from <person>`. When the owner is not
+  clear nothing is created and the line goes to "Open points" as "owner unclear".
+- Deadline: resolved against the meeting date (`meeting_date_local`), never the processing time.
+  The date is filled only when the deadline is explicit; vague wording leaves it empty.
+- Duplicates: before creating, open tasks of the Tasks database (Type=TASK, any age; meeting pages
+  excluded) are compared by meaning. On a match nothing is created: a "Mentioned again" line with
+  date and quote is appended to the page and the due date changes only if the new one is explicit.
+  The agent has no comment tool, so the note goes in the page body.
+- Evidence: every created or updated task starts with `Quote [HH:MM:SS]: "<exact words>"`; without
+  a supporting quote no task is created.
+- Limits: this is a prompt, so the matching is the model's judgement; check the first recaps.
+
 ## 5. Files the user edits
 
 In `<app data>` (`com.meetily.ai`):
