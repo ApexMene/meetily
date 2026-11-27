@@ -52,6 +52,7 @@ pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, 
 pub mod meeting_edit; // Fork: merge meetings, remove parts of a meeting
 pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
 pub mod post_meeting; // Fork: re-transcription, clean-up and Notion after the meeting
+mod teams_speaker; // Fork: Teams active speaker (optional, off by default)
 mod speakers; // Fork: microphone/system timeline (speakers.json)
 pub mod ollama;
 pub mod onboarding;
@@ -724,6 +725,7 @@ pub fn run() {
             tauri::async_runtime::block_on(claude_code::init(_app.handle()));
             // Fork: optional features, all off until turned on in Settings.
             custom_models::latin_filter::apply(_app.handle());
+            teams_speaker::init(_app.handle());
             post_meeting::start(_app.handle().clone());
             health::start(_app.handle().clone());
             meeting_automation::start(_app.handle().clone());
@@ -779,6 +781,8 @@ pub fn run() {
             health::health_run,
             custom_models::second_opinion::second_opinion_list,
             custom_models::second_opinion::second_opinion_install,
+            teams_speaker::teams_speaker_get,
+            teams_speaker::teams_speaker_set_enabled,
             custom_models::latin_filter::latin_filter_get,
             custom_models::latin_filter::latin_filter_set,
             // Fork: merge meetings, remove parts of a meeting

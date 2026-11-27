@@ -56,6 +56,22 @@ recording stops. A transcript segment gets `[mic]` or `[system]` when one source
 its time; the tags are shown to Claude in the clean-up and in the recap, never stored in the
 transcript. Meetings recorded earlier or imported have no timeline and no tags.
 
+### 3.1 Teams active speaker (optional, off by default, Windows only)
+
+When turned on (`teams_speaker_set_enabled`, effective from the next recording), a reader watches
+which participant Teams shows as speaking and saves `active_speakers.json` next to the recording
+(`[{"start","end","name"}]`, seconds from the start; a span only when exactly one person shows as
+speaking). It is data for after-meeting steps that name the voices of "the others".
+
+- The reader is a hidden PowerShell child (UI Automation, one reading per second) on its own
+  thread. A hung or crashing UI Automation call cannot touch Meetily: no answer in 5 s or an error
+  counts as a failure, 3 in a row switch the reader off for that recording (circuit breaker) and
+  kill the child; with no Teams window for 60 s at the start it stops by itself; a panic is caught;
+  stopping the recording never waits for it.
+- Not verified against a live Teams meeting: the speaking indicator is matched by name pattern
+  ("<name> is speaking" / "<name> sta parlando"), which depends on the Teams version and language.
+  Check `active_speakers.json` after a test meeting before relying on it.
+
 ## 4. After-meeting queue
 
 - A meeting becomes a job in `<app data>/post-meeting/queue/` when its summary is saved, and a

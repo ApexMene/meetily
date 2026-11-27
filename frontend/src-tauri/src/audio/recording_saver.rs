@@ -366,6 +366,7 @@ impl RecordingSaver {
         // Fork: microphone/system timeline next to the transcript
         if let Some(folder) = &self.meeting_folder {
             crate::speakers::save(folder);
+            crate::teams_speaker::stop_and_save(folder);
         }
 
         // Check if incremental saver exists (indicates auto_save was enabled)

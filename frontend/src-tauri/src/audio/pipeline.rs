@@ -1003,6 +1003,7 @@ impl AudioPipeline {
         system_device_kind: super::device_detection::InputDeviceKind,
     ) -> Result<Self> {
         crate::speakers::start(sample_rate); // Fork: microphone/system timeline of this recording
+        crate::teams_speaker::start(); // Fork: optional Teams active speaker reader (never blocks)
 
         // Log device characteristics for adaptive buffering
         info!("🎛️ AudioPipeline initializing with device characteristics:");
