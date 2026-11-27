@@ -12,7 +12,7 @@ does not open these settings.
 |---|---|---|
 | Record meetings automatically | General › Automatic Meetings | Starts recording when a meeting app (Teams, Zoom, browser calls…) holds the microphone, stops when it lets go |
 | Start/stop shortcut | General › Automatic Meetings | Global shortcut, usable from any app |
-| Delete recording audio after N days | General › Automatic Meetings | Deletes only the audio files Meetily wrote (`audio.<ext>`, `recording.mp4`); transcripts are kept, and meetings still queued for re-transcription keep their audio. Asks before deleting more |
+| Delete recording audio after N days | General › Automatic Meetings | Deletes only the audio files Meetily wrote (`audio.<ext>`, `recording.mp4`, the trim backup `audio.original.<ext>`); transcripts are kept, and meetings still queued for re-transcription keep their audio. Asks before deleting more |
 | Start with Windows | General › Automatic Meetings | `HKCU\…\Run` entry with `--autostart`: Meetily starts hidden in the tray |
 | Latin script only (Parakeet) | Transcription | The decoder only emits Latin-script tokens, so the multilingual model cannot drift into Cyrillic or Greek |
 | Re-transcribe when the meeting ends | Transcription › After the Meeting | Transcribes the whole recording again with the best local model, optionally a second model, then optionally Claude cleans it |

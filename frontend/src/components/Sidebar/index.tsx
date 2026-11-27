@@ -13,6 +13,7 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
+import { MergeBar } from '@/components/MeetingEdit/MergeBar'; // Fork: merge meetings
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -56,7 +57,8 @@ const Sidebar: React.FC = () => {
     isSearching,
     meetings,
     setMeetings,
-    serverAddress
+    serverAddress,
+    refetchMeetings, // Fork: merge meetings
   } = useSidebar();
 
   // Get recording state from RecordingStateContext (single source of truth)
@@ -105,6 +107,7 @@ const Sidebar: React.FC = () => {
   // }, [settingsSaveSuccess]);
 
 
+  const [mergeSelection, setMergeSelection] = useState<string[]>([]); // Fork: Ctrl/Cmd+clicked meetings to merge
   const [deleteModalState, setDeleteModalState] = useState<{ isOpen: boolean; itemId: string | null }>({ isOpen: false, itemId: null });
 
   useEffect(() => {
@@ -570,12 +573,17 @@ const Sidebar: React.FC = () => {
         <div
           className={`flex items-center transition-all duration-150 group ${item.type === 'folder' && depth === 0
             ? 'p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg'
-            : `px-3 py-2 my-0.5 rounded-md text-sm ${isActive ? 'bg-blue-100 text-blue-700 font-medium' :
+            : `px-3 py-2 my-0.5 rounded-md text-sm ${mergeSelection.includes(item.id) ? 'bg-gray-100 ring-1 ring-gray-300' /* Fork: merge */ : isActive ? 'bg-blue-100 text-blue-700 font-medium' :
               hasTranscriptMatch ? 'bg-yellow-50' : 'hover:bg-gray-50'
             } cursor-pointer`
             }`}
           style={item.type === 'folder' && depth === 0 ? {} : { paddingLeft }}
-          onClick={() => {
+          onClick={(event) => {
+            // Fork: Ctrl/Cmd+click selects meetings to merge.
+            if (isMeetingItem && (event.ctrlKey || event.metaKey)) {
+              setMergeSelection(selection => selection.includes(item.id) ? selection.filter(id => id !== item.id) : [...selection, item.id]);
+              return;
+            }
             if (item.type === 'folder') {
               toggleFolder(item.id);
             } else {
@@ -764,6 +772,18 @@ const Sidebar: React.FC = () => {
                   .filter(item => item.type === 'folder' && expandedFolders.has(item.id) && item.children)
                   .map(item => (
                     <div key={`${item.id}-children`} className="mx-3">
+                      {/* Fork: merge meetings */}
+                      {item.id === 'meetings' && mergeSelection.length > 0 && (
+                        <MergeBar
+                          selection={mergeSelection}
+                          onCancel={() => setMergeSelection([])}
+                          onMerged={async (meetingId) => {
+                            setMergeSelection([]);
+                            await refetchMeetings();
+                            router.push(`/meeting-details?id=${meetingId}`);
+                          }}
+                        />
+                      )}
                       {item.children!.map(child => renderItem(child, 1))}
                     </div>
                   ))}

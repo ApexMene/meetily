@@ -4,7 +4,8 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { TrimSegments } from '@/components/MeetingEdit/TrimSegments'; // Fork: remove parts of a meeting
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -63,6 +64,7 @@ export function TranscriptPanel({
       confidence: t.confidence,
     }));
   }, [transcripts, usePagination, segments]);
+  const [trimming, setTrimming] = useState(false); // Fork: remove parts of a meeting
 
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
@@ -76,9 +78,27 @@ export function TranscriptPanel({
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
         />
+        {/* Fork: remove parts of a meeting */}
+        {!isRecording && meetingId && !trimming && convertedSegments.length > 0 && (
+          <button className="block mx-auto mt-2 text-xs text-gray-500 hover:text-gray-800" onClick={() => setTrimming(true)}>
+            Remove parts…
+          </button>
+        )}
       </div>
 
-      {/* Transcript content - use virtualized view for better performance */}
+      {/* Fork: segment picker while removing parts */}
+      {trimming && meetingId ? (
+        <TrimSegments
+          meetingId={meetingId}
+          segments={convertedSegments}
+          hasAudio={!!meetingFolderPath}
+          hasMore={hasMore}
+          onLoadMore={onLoadMore}
+          onClose={() => setTrimming(false)}
+          onTrimmed={onRefetchTranscripts}
+        />
+      ) : (
+      /* Transcript content - use virtualized view for better performance */
       <div className="flex-1 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}
@@ -96,6 +116,7 @@ export function TranscriptPanel({
           onLoadMore={onLoadMore}
         />
       </div>
+      )}
 
       {/* Custom prompt input at bottom of transcript section */}
       {!isRecording && convertedSegments.length > 0 && (

@@ -82,9 +82,13 @@ pub fn save(folder: &Path) {
         Ok(mut recorder) => recorder.take().map(|recorder| recorder.runs).unwrap_or_default(),
         Err(_) => return,
     };
-    if runs.is_empty() {
-        return;
+    if !runs.is_empty() {
+        write(folder, &runs);
     }
+}
+
+/// Replaces the timeline of a meeting (after its audio was cut).
+pub fn write(folder: &Path, runs: &[Run]) {
     if let Err(error) = crate::fork_store::write_json(&folder.join(FILE), &runs) {
         log::warn!("speakers: cannot save the timeline: {}", error);
     }

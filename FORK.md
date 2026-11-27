@@ -34,6 +34,10 @@ non vanno in conflitto:
   [docs/fork/meeting-automation.md](docs/fork/meeting-automation.md). Codice in
   `frontend/src-tauri/src/meeting_automation/`, `post_meeting/`, `notion_agent/` e
   `frontend/src/components/ForkSettings.tsx`.
+- **Unire meeting e togliere parti di un meeting**: Ctrl+clic su più meeting nella barra laterale e
+  **Merge**; nella pagina del meeting **Remove parts…** toglie i segmenti scelti dalla trascrizione e
+  gli stessi intervalli dall'audio. Dettagli in [docs/fork/meeting-edit.md](docs/fork/meeting-edit.md).
+  Codice in `frontend/src-tauri/src/meeting_edit/` e `frontend/src/components/MeetingEdit/`.
 
 Durante un merge da upstream, cercare `Fork:` per ritrovare tutti gli agganci.
 

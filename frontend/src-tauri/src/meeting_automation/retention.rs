@@ -5,15 +5,17 @@ use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 
-/// Audio files Meetily itself writes in a meeting folder: recordings (`audio.mp4`) and imports
-/// (`audio.<ext>`). Anything else the user put there is never touched.
+/// Audio files Meetily itself writes in a meeting folder: recordings (`audio.mp4`), imports
+/// (`audio.<ext>`) and the copy kept by the first trim (`audio.original.<ext>`). Anything else the
+/// user put there is never touched.
 fn is_meetily_audio(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return false };
     let name = name.to_ascii_lowercase();
     if name == "recording.mp4" {
         return true;
     }
-    name.strip_prefix("audio.").is_some_and(|ext| {
+    let extension = name.strip_prefix(crate::meeting_edit::trim::BACKUP_PREFIX).or_else(|| name.strip_prefix("audio."));
+    extension.is_some_and(|ext| {
         ["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "mkv", "webm", "wma"].contains(&ext)
     })
 }
@@ -96,6 +98,8 @@ mod tests {
         assert!(is_meetily_audio(Path::new("C:/m/audio.mp4")));
         assert!(is_meetily_audio(Path::new("C:/m/Audio.WAV")));
         assert!(is_meetily_audio(Path::new("C:/m/recording.mp4")));
+        assert!(is_meetily_audio(Path::new("C:/m/audio.original.mp4")));
+        assert!(!is_meetily_audio(Path::new("C:/m/audio.original.txt")));
         assert!(!is_meetily_audio(Path::new("C:/m/interview.mp3")));
         assert!(!is_meetily_audio(Path::new("C:/m/transcripts.json")));
         assert!(!is_meetily_audio(Path::new("C:/m/audio.txt")));

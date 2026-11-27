@@ -49,6 +49,7 @@ pub mod notifications;
 mod fork_store; // Fork: small JSON settings files
 pub mod health; // Fork: health check of the meeting -> Notion flow
 pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, audio retention
+pub mod meeting_edit; // Fork: merge meetings, remove parts of a meeting
 pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
 pub mod post_meeting; // Fork: re-transcription, clean-up and Notion after the meeting
 mod speakers; // Fork: microphone/system timeline (speakers.json)
@@ -780,6 +781,9 @@ pub fn run() {
             custom_models::second_opinion::second_opinion_install,
             custom_models::latin_filter::latin_filter_get,
             custom_models::latin_filter::latin_filter_set,
+            // Fork: merge meetings, remove parts of a meeting
+            meeting_edit::merge::meeting_edit_merge,
+            meeting_edit::trim::meeting_edit_trim,
             start_recording,
             stop_recording,
             is_recording,
