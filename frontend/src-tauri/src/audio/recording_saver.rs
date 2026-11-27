@@ -367,6 +367,8 @@ impl RecordingSaver {
         if let Some(folder) = &self.meeting_folder {
             crate::speakers::save(folder);
             crate::teams_speaker::stop_and_save(folder);
+        } else {
+            crate::teams_speaker::stop(); // Fork: never leave the reader running
         }
 
         // Check if incremental saver exists (indicates auto_save was enabled)

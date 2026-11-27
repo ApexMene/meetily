@@ -13,6 +13,8 @@ pub const MAX_FAILURES: u32 = 3;
 /// Readings without any Teams window, at the start, after which the reader stops by itself.
 pub const IDLE_LIMIT: u32 = 60;
 const MAX_SPANS: usize = 20_000;
+/// Hard cap on one recording: a reader that was never stopped ends by itself.
+pub const MAX_SECONDS: f64 = 8.0 * 3600.0;
 const MAX_NAME_CHARS: usize = 60;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +120,10 @@ pub fn run(reader: &mut dyn Reader, stop: &AtomicBool, now: &dyn Fn() -> f64) ->
     let (mut seen, mut idle) = (false, 0u32);
     let mut disabled = None;
     while !stop.load(Ordering::Relaxed) {
+        if now() > MAX_SECONDS {
+            disabled = Some("recording longer than 8 hours".to_string());
+            break;
+        }
         match reader.read(READ_TIMEOUT) {
             Ok(Some(names)) => {
                 breaker.ok();
@@ -259,6 +265,14 @@ mod tests {
         let outcome = run(&mut reader, &stop, &clock());
         assert_eq!(outcome.disabled.as_deref(), Some("no Teams window found"));
         assert_eq!(reader.1 as u32, IDLE_LIMIT);
+    }
+
+    #[test]
+    fn gives_up_after_the_hard_cap() {
+        let stop = AtomicBool::new(false);
+        let mut reader = Script((0..10).map(|_| names(&["Anna"])).collect(), 0, None);
+        let outcome = run(&mut reader, &stop, &|| MAX_SECONDS + 1.0);
+        assert!(outcome.disabled.is_some() && reader.1 == 0);
     }
 
     #[test]

@@ -40,7 +40,7 @@ while ($true) {
         foreach ($win in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
           $stack = New-Object System.Collections.Stack
           $stack.Push($win); $count = 0
-          while ($stack.Count -gt 0 -and $count -lt 3000 -and (Get-Date) -lt $deadline) {
+          while ($stack.Count -gt 0 -and $count -lt 2000 -and (Get-Date) -lt $deadline) {
             $el = $stack.Pop(); $count++
             $n = $el.Current.Name
             if ($n) { $m = $rx.Match($n); if ($m.Success) { [void]$names.Add($m.Groups[1].Value.Trim()) } }
@@ -52,8 +52,7 @@ while ($true) {
       [Console]::Out.WriteLine("T`t" + ($names -join "`t"))
     }
   } catch { [Console]::Out.WriteLine("E") }
-  $left = 1000 - [int]((Get-Date) - $t0).TotalMilliseconds
-  if ($left -gt 0) { Start-Sleep -Milliseconds $left }
+  Start-Sleep -Milliseconds 1000
 }
 "#;
 
@@ -66,7 +65,9 @@ while ($true) {
 
     impl Powershell {
         pub fn start() -> Result<Self, String> {
-            let script = std::env::temp_dir().join(format!("meetily-teams-speaker-{}.ps1", std::process::id()));
+            static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let script = std::env::temp_dir().join(format!("meetily-teams-speaker-{}-{}.ps1", std::process::id(), n));
             std::fs::write(&script, SCRIPT).map_err(|e| e.to_string())?;
             let mut child = Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])

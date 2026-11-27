@@ -76,6 +76,13 @@ pub fn start() {
     }
 }
 
+/// Stops the reader without saving anything.
+pub fn stop() {
+    if let Some(session) = SESSION.lock().ok().and_then(|mut s| s.take()) {
+        session.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 /// The recording stopped: saves what was read next to it. Never blocks the caller.
 pub fn stop_and_save(folder: &Path) {
     let Some(session) = SESSION.lock().ok().and_then(|mut s| s.take()) else { return };
