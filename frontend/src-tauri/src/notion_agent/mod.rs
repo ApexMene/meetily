@@ -253,6 +253,8 @@ pub async fn write_recap<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool
     }
     let instructions = fill_placeholders(&load_prompt(&base, &env), &env);
     let content = format!("META\n{}\n\nTRANSCRIPT\n{}", input.meta, input.transcript);
+    // Fork: uncertain values (marked "(?)" by the transcript check) must stay marked
+    let instructions = format!("{}\n\n{}", instructions, crate::glossary::critical::PROMPT_NOTE);
     let claude_env = claude_env(app);
     let request = Request {
         model: config.model.trim(),

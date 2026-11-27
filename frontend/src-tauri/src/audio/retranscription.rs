@@ -418,7 +418,7 @@ async fn run_retranscription<R: Runtime>(
                 i + 1, processable_count, segment_duration_sec, conf,
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
-            all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            all_transcripts.push((crate::glossary::apply(&text), segment.start_timestamp_ms, segment.end_timestamp_ms)); // Fork: glossary
             kept_segments.push(i);
             total_confidence += conf;
         } else {

@@ -10,7 +10,7 @@ import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
-import { MeetingAutomationSettings, PostMeetingSettings } from '@/components/ForkSettings';
+import { GlossarySettings, MeetingAutomationSettings, PostMeetingSettings } from '@/components/ForkSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
@@ -123,6 +123,7 @@ export default function SettingsPage() {
                 setTranscriptModelConfig={setTranscriptModelConfig}
               />
               <PostMeetingSettings />
+              <GlossarySettings />
             </TabsContent>
             <TabsContent value="summaryModels">
               <SummaryModelSettings />

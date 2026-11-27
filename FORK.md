@@ -38,6 +38,13 @@ non vanno in conflitto:
   **Merge**; nella pagina del meeting **Remove parts…** toglie i segmenti scelti dalla trascrizione e
   gli stessi intervalli dall'audio. Dettagli in [docs/fork/meeting-edit.md](docs/fork/meeting-edit.md).
   Codice in `frontend/src-tauri/src/meeting_edit/` e `frontend/src/components/MeetingEdit/`.
+- **Glossario e valori incerti** (Settings > Transcription): elenco di termini da scrivere giusti
+  (suggerimento a Whisper, correzione prudente dei quasi-errori per tutti i motori); dopo il meeting la
+  ri-trascrizione precisa viene confrontata con quella dal vivo e i valori critici su cui le due letture
+  non concordano (numeri, versioni come 1.0.0g, IP, date, orari) sono marcati "(?)" e Claude li porta nel
+  resoconto e nei task. La ri-trascrizione ha un limite di tempo, scaduto il quale resta il testo dal
+  vivo. Dettagli in [docs/fork/glossary-numbers.md](docs/fork/glossary-numbers.md). Codice in
+  `frontend/src-tauri/src/glossary/`.
 
 Durante un merge da upstream, cercare `Fork:` per ritrovare tutti gli agganci.
 

@@ -269,6 +269,8 @@ pub fn start_transcription_task<R: Runtime>(
 
                                     let sequence_id =
                                         SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+                                    // Fork: glossary correction (no-op without a glossary)
+                                    let transcript = crate::glossary::apply(&transcript);
                                     let update = TranscriptUpdate {
                                         text: transcript,
                                         timestamp: format_current_timestamp(),

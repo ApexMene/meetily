@@ -191,6 +191,65 @@ export function MeetingAutomationSettings() {
   );
 }
 
+interface Glossary {
+  terms: string[];
+  correct: boolean;
+  minSimilarity: number;
+  secondPassMinutes: number;
+}
+
+/** Transcription tab: words the transcript must spell right, and the time limit of the precise pass. */
+export function GlossarySettings() {
+  const { settings, save } = useSettings<Glossary>('glossary_settings_get', 'glossary_settings_set');
+  const [text, setText] = useState('');
+  const [minutes, setMinutes] = useState('');
+  useEffect(() => {
+    if (settings) { setText(settings.terms.join('\n')); setMinutes(String(settings.secondPassMinutes)); }
+  }, [settings]);
+  if (!settings) return null;
+
+  const saveTerms = () => {
+    const terms = text.split('\n').map((t) => t.trim()).filter(Boolean);
+    if (terms.join('\n') !== settings.terms.join('\n')) save({ terms });
+  };
+  const saveMinutes = () => {
+    const n = Math.max(5, Math.min(480, parseInt(minutes || '0', 10) || settings.secondPassMinutes));
+    setMinutes(String(n));
+    if (n !== settings.secondPassMinutes) save({ secondPassMinutes: n });
+  };
+
+  return (
+    <div className={CARD + ' mt-6'}>
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">Glossary</h3>
+      <div className="pb-4">
+        <div className="font-medium text-gray-900">Terms to spell correctly</div>
+        <div className="text-sm text-gray-600 mt-0.5 mb-2">
+          One per line: names, products, acronyms. Whisper gets them as a hint; every model gets a careful correction of near-misses.
+        </div>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={saveTerms}
+          rows={6}
+          spellCheck={false}
+          className="w-full rounded-md border border-gray-200 p-2 text-sm font-mono"
+          placeholder={'Kubernetes\nGrafana\nVisual Studio Code'}
+        />
+      </div>
+      <Row title="Correct near-misses" help="Fixes a word that is almost a glossary term (for example Grafanna to Grafana). Only words of five letters or more; numbers are never touched.">
+        <Switch checked={settings.correct} onCheckedChange={(v) => save({ correct: v })} />
+      </Row>
+      <Row title="Time limit of the precise pass" help="Minutes. After a meeting, the precise re-transcription that checks numbers and versions stops at this limit and the live transcript is kept.">
+        <div className="flex items-center gap-2">
+          <Input type="number" min={5} max={480} value={minutes} onChange={(e) => setMinutes(e.target.value)} onBlur={saveMinutes}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} className="w-20 text-right" />
+          <span className="text-sm text-gray-600">min</span>
+        </div>
+      </Row>
+    </div>
+  );
+}
+
 /** Transcription tab: Latin-only output, then the work after the meeting. */
 export function PostMeetingSettings() {
   const { settings, save } = useSettings<PostMeeting>('post_meeting_settings_get', 'post_meeting_settings_set');

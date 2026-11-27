@@ -81,7 +81,7 @@ struct Segment {
 /// is kept as it is.
 pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, model: &str, meeting_id: &str, folder: &Path) -> Result<(usize, usize), String> {
     let dir = super::data_dir(app).ok_or("app data directory unavailable")?;
-    let prompt = load_prompt(&dir);
+    let prompt = format!("{}\n{}", load_prompt(&dir), crate::glossary::critical::PROMPT_NOTE);
     let alt = load_alt_texts(folder);
     let runs = speakers::load(folder);
     let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")

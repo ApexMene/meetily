@@ -48,6 +48,7 @@ pub mod doodle;
 pub mod notifications;
 mod fork_store; // Fork: small JSON settings files
 pub mod health; // Fork: health check of the meeting -> Notion flow
+pub mod glossary; // Fork: user glossary and uncertain-value marking
 pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, audio retention
 pub mod meeting_edit; // Fork: merge meetings, remove parts of a meeting
 pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
@@ -724,6 +725,7 @@ pub fn run() {
             tauri::async_runtime::block_on(claude_code::init(_app.handle()));
             // Fork: optional features, all off until turned on in Settings.
             custom_models::latin_filter::apply(_app.handle());
+            glossary::init(_app.handle());
             post_meeting::start(_app.handle().clone());
             health::start(_app.handle().clone());
             meeting_automation::start(_app.handle().clone());
@@ -779,6 +781,8 @@ pub fn run() {
             health::health_run,
             custom_models::second_opinion::second_opinion_list,
             custom_models::second_opinion::second_opinion_install,
+            glossary::glossary_settings_get,
+            glossary::glossary_settings_set,
             custom_models::latin_filter::latin_filter_get,
             custom_models::latin_filter::latin_filter_set,
             // Fork: merge meetings, remove parts of a meeting

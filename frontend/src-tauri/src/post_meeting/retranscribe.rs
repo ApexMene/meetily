@@ -51,7 +51,7 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, meetin
     };
     let started = Instant::now();
     log::info!("post-meeting: re-transcribing {} ({:?})", meeting_id, model);
-    let result = crate::audio::retranscription::start_retranscription_with_alt(
+    let work = crate::audio::retranscription::start_retranscription_with_alt(
         app.clone(),
         meeting_id.to_string(),
         folder.clone(),
@@ -59,15 +59,41 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, meetin
         model,
         Some("parakeet".to_string()),
         alt_model,
-    )
-    .await;
+    );
+    tokio::pin!(work);
+    // Time budget: when the precise pass takes too long it is cancelled and the live transcript
+    // (first pass) stays, so the recap is never held up indefinitely. The database is only
+    // written at the very end of the pass, so a cancelled pass changes nothing.
+    let budget = crate::glossary::second_pass_budget();
+    let mut out_of_time = false;
+    let result = tokio::select! {
+        result = &mut work => result,
+        _ = tokio::time::sleep(budget) => {
+            out_of_time = true;
+            log::warn!("post-meeting: re-transcription of {} over its time budget ({} min), cancelling", meeting_id, budget.as_secs() / 60);
+            crate::audio::retranscription::cancel_retranscription();
+            work.await
+        }
+    };
     match result {
-        Ok(result) => log::info!(
-            "post-meeting: {} re-transcribed, {} segments in {:.0}s",
-            meeting_id,
-            result.segments_count,
-            started.elapsed().as_secs_f64()
-        ),
+        Ok(result) => {
+            log::info!(
+                "post-meeting: {} re-transcribed, {} segments in {:.0}s",
+                meeting_id,
+                result.segments_count,
+                started.elapsed().as_secs_f64()
+            );
+            // Fork: mark the values the live and the precise reading disagree on
+            match crate::glossary::second_pass::mark_uncertain(pool, meeting_id, Path::new(&folder)).await {
+                Ok(0) => {}
+                Ok(count) => log::info!("post-meeting: {} segments of {} have uncertain values marked (?)", count, meeting_id),
+                Err(error) => log::warn!("post-meeting: uncertain-value check of {} skipped: {}", meeting_id, error),
+            }
+        }
+        Err(error) if out_of_time => {
+            log::warn!("post-meeting: re-transcription of {} stopped at the time budget, live transcript kept ({})", meeting_id, error);
+            return true;
+        }
         Err(error) => {
             let error = error.to_string();
             // A recording cancels the work, a manual re-transcription blocks it: redo it later.

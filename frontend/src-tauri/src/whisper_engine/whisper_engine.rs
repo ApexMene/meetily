@@ -554,6 +554,9 @@ impl WhisperEngine {
         let hardware_profile = crate::audio::HardwareProfile::detect();
         let adaptive_config = hardware_profile.get_whisper_config();
 
+        // Fork: glossary as initial prompt (declared before `params`, which borrows it)
+        let glossary_prompt = crate::glossary::initial_prompt();
+
         // ADAPTIVE parameters - optimized for current hardware
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
             beam_size: adaptive_config.beam_size as i32,
@@ -571,6 +574,9 @@ impl WhisperEngine {
         };
         params.set_language(language_code);
         params.set_translate(should_translate);
+        if let Some(prompt) = glossary_prompt.as_deref() {
+            params.set_initial_prompt(prompt);
+        }
 
         // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
         // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
@@ -673,10 +679,15 @@ impl WhisperEngine {
             .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
         let hardware_profile = crate::audio::HardwareProfile::detect();
         let adaptive_config = hardware_profile.get_whisper_config();
+        // Fork: glossary as initial prompt (declared before `params`, which borrows it)
+        let glossary_prompt = crate::glossary::initial_prompt();
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
             beam_size: adaptive_config.beam_size as i32,
             patience: 1.0,
         });
+        if let Some(prompt) = glossary_prompt.as_deref() {
+            params.set_initial_prompt(prompt);
+        }
 
         let (language_code, should_translate) = match language.as_deref() {
             Some("auto") | None => (None, false),
