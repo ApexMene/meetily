@@ -346,7 +346,8 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
     let created: String = meeting.try_get("created_at").unwrap_or_default();
     let saved = DateTime::parse_from_rfc3339(&created).map_err(|error| error.to_string())?.with_timezone(&Utc);
     let folder: Option<String> = meeting.try_get("folder_path").ok().flatten();
-    let runs = folder.map(|folder| crate::speakers::load(Path::new(&folder))).unwrap_or_default();
+    let runs = folder.as_ref().map(|folder| crate::speakers::load(Path::new(folder))).unwrap_or_default();
+    let voices = folder.as_ref().map(|folder| crate::voiceprint::load_ids(Path::new(folder))).unwrap_or_default();
 
     let rows = sqlx::query(
         "SELECT transcript, timestamp, audio_start_time, audio_end_time FROM transcripts \
@@ -374,8 +375,8 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
         let end = row.try_get::<Option<f64>, _>("audio_end_time").ok().flatten();
         let tag = offset
             .zip(end)
-            .and_then(|(offset, end)| crate::speakers::dominant(&runs, offset, end))
-            .map(|source| format!("{} ", source.tag()))
+            .and_then(|(offset, end)| crate::speakers::dominant(&runs, offset, end).map(|source| (source, offset, end)))
+            .map(|(source, offset, end)| format!("{} ", crate::voiceprint::hint_tag(source, &voices, Some(offset), Some(end))))
             .unwrap_or_default();
         let label = match offset {
             Some(offset) => (start + ChronoDuration::milliseconds((offset * 1000.0) as i64))
@@ -408,7 +409,7 @@ async fn load_meeting(pool: &sqlx::SqlitePool, meeting_id: &str, test_mode: bool
         "test_mode": test_mode,
     });
     if !runs.is_empty() {
-        meta["speaker_tags"] = crate::speakers::TAGS_HELP.into();
+        meta["speaker_tags"] = format!("{} {}", crate::speakers::TAGS_HELP, crate::voiceprint::NAMES_HELP).into();
     }
     Ok(MeetingInput { meta, transcript, saved, seconds })
 }

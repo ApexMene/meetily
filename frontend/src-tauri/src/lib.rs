@@ -52,6 +52,7 @@ pub mod meeting_automation; // Fork: automatic meetings, meeting bar, shortcut, 
 pub mod meeting_edit; // Fork: merge meetings, remove parts of a meeting
 pub mod notion_agent; // Fork: recap and tasks in Notion (via Claude Code)
 pub mod post_meeting; // Fork: re-transcription, clean-up and Notion after the meeting
+mod voiceprint; // Fork: speaker voiceprints (embeddings of the remote voices)
 mod speakers; // Fork: microphone/system timeline (speakers.json)
 pub mod ollama;
 pub mod onboarding;
@@ -779,6 +780,12 @@ pub fn run() {
             health::health_run,
             custom_models::second_opinion::second_opinion_list,
             custom_models::second_opinion::second_opinion_install,
+            voiceprint::voiceprint_settings_get,
+            voiceprint::voiceprint_set_enabled,
+            voiceprint::voiceprint_list,
+            voiceprint::voiceprint_delete,
+            voiceprint::voiceprint_meeting_speakers,
+            voiceprint::voiceprint_name_cluster,
             custom_models::latin_filter::latin_filter_get,
             custom_models::latin_filter::latin_filter_set,
             // Fork: merge meetings, remove parts of a meeting

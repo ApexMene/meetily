@@ -56,6 +56,26 @@ recording stops. A transcript segment gets `[mic]` or `[system]` when one source
 its time; the tags are shown to Claude in the clean-up and in the recap, never stored in the
 transcript. Meetings recorded earlier or imported have no timeline and no tags.
 
+### 3.1 Voiceprints of the remote voices (optional, off by default)
+
+An after-meeting step (`voiceprint/`) tells the remote voices apart and recognises people met
+before. It only reads the saved audio, so recording and transcription are never affected; any
+failure (no model, no network, short or broken audio) skips the step and is logged.
+
+- Segments dominated by system audio and at least 1.2 s long are embedded with WeSpeaker ResNet34
+  (ONNX, 25 MB, CC-BY-4.0), downloaded on first use from a pinned Hugging Face commit with a
+  sha256 check into `<app data>/models/speaker-embedding/`. The model is never in the repository.
+- Embeddings are grouped by cosine similarity into "Other 1", "Other 2"... and each group is
+  compared with the stored voiceprints (`voiceprints/voiceprints.json`, embeddings only, no audio).
+  The result is `speaker_ids.json` in the meeting folder; the recap shows `[system: Anna]`.
+- `voiceprint_name_cluster` names a group and stores its voiceprint; a voice recognised with a clear
+  margin also refines the stored print (at most 20 samples averaged). If
+  `active_speakers.json` (`[{"start","end","name"}]`, seconds from the start) is present, names are
+  assigned by time overlap (at least 3 s and 60% agreement per group).
+- Commands: `voiceprint_set_enabled`, `voiceprint_list`, `voiceprint_delete`,
+  `voiceprint_meeting_speakers`, `voiceprint_name_cluster`. The microphone is never embedded.
+- Thresholds (0.55) are starting values; the mic/system split and voice matching are heuristics.
+
 ## 4. After-meeting queue
 
 - A meeting becomes a job in `<app data>/post-meeting/queue/` when its summary is saved, and a

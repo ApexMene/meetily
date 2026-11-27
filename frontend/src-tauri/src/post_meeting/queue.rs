@@ -214,6 +214,7 @@ async fn run_job<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, path: 
         job.retranscribed = true;
         let _ = write_json(path, &*job);
     }
+    crate::voiceprint::run(app, pool, &job.meeting_id).await; // optional, never fails the job
     let outcome = if crate::notion_agent::is_enabled(app) {
         crate::notion_agent::write_recap(app, pool, &job.meeting_id).await?
     } else {
