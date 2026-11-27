@@ -74,6 +74,9 @@ failure (no model, no network, short or broken audio) skips the step and is logg
   assigned by time overlap (at least 3 s and 60% agreement per group).
 - Commands: `voiceprint_set_enabled`, `voiceprint_list`, `voiceprint_delete`,
   `voiceprint_meeting_speakers`, `voiceprint_name_cluster`. The microphone is never embedded.
+- No Settings toggle yet: set `{"enabled": true}` in `<app data>/voiceprints/settings.json` and restart
+  Meetily (or call `voiceprint_set_enabled`). The step runs inside the after-meeting queue, so it only
+  happens for meetings queued by the re-transcription or Notion steps; on its own it queues nothing.
 - Thresholds (0.55) are starting values; the mic/system split and voice matching are heuristics.
 
 ## 4. After-meeting queue
